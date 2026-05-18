@@ -406,6 +406,14 @@ function completionItems(value, tokStart, tokText) {
       .filter(s => s.toLowerCase().startsWith(lower))
       .map(s => ({ label: s, desc: "" }));
   }
+  if (prev === "/res") {
+    if (!state?.loaded) return [];
+    const model = (state.models ?? []).find(m => m.name === state.model);
+    const presets = model?.resolutions ?? [];
+    return presets
+      .map(r => ({ label: `${r.w}x${r.h}`, desc: r.label }))
+      .filter(it => it.label.toLowerCase().startsWith(lower));
+  }
   if (tokText.startsWith("/")) {
     return COMMANDS
       .filter(c => c.toLowerCase().startsWith(lower))
@@ -513,11 +521,21 @@ function cursorOnLastLine() {
 
 // ---------- intellisense-style suggestion popup ----------
 // Updated on every input event; positioned at the textarea caret via a
-// short-lived measurement mirror. State machine:
-//   visible == true  → Up/Down navigate popup, Tab/click accept, Esc closes.
-//                      Up/Down do NOT scroll history when popup is open.
-//   visible == false → Up/Down do history navigation (edge-line aware).
-//                      Tab opens the popup (or accepts if exactly one match).
+// short-lived measurement mirror.
+//
+// Key handling — arrows are reserved for history navigation, so the popup
+// is driven by Tab (sublime-style cycling). Each Tab rewrites the token
+// at the cursor with the next candidate; Shift+Tab rewinds. The original
+// typed prefix is preserved in `tokenText` so cycling stays consistent
+// across replacements.
+//
+//   Tab        → cycle selection forward, rewrite token
+//   Shift+Tab  → cycle selection backward, rewrite token
+//   Esc        → dismiss popup (without undoing the current replacement)
+//   click item → jump to that item + dismiss
+//   typing     → rebuild popup from the new token, selected=0
+//   ↑ / ↓      → history navigation (unchanged; popup never captures them)
+//   Enter      → submit (unchanged; popup never captures it)
 const popup = $("suggest-popup");
 let suggest = {
   visible: false,
@@ -526,6 +544,7 @@ let suggest = {
   tokenStart: 0,
   tokenEnd: 0,
   tokenText: "",
+  cycling: false,   // true once Tab has been pressed; further Tabs cycle
 };
 
 function caretCoords() {
@@ -593,7 +612,7 @@ function updateSuggest() {
   const items = completionItems(value, tok.start, tok.text);
   if (!items.length) {
     suggest = { visible: false, items: [], selected: 0,
-                tokenStart: 0, tokenEnd: 0, tokenText: "" };
+                tokenStart: 0, tokenEnd: 0, tokenText: "", cycling: false };
     popup.classList.remove("open");
     popup.setAttribute("aria-hidden", "true");
     return;
@@ -601,41 +620,52 @@ function updateSuggest() {
   suggest = {
     visible: true, items, selected: 0,
     tokenStart: tok.start, tokenEnd: tok.end, tokenText: tok.text,
+    cycling: false,
   };
   renderSuggest();
 }
 
 function hideSuggest() {
   suggest.visible = false;
+  suggest.cycling = false;
   popup.classList.remove("open");
   popup.setAttribute("aria-hidden", "true");
 }
 
-function acceptSuggest() {
+// Tab/Shift-Tab driver: advance selection, rewrite the token in the textarea.
+// First Tab "accepts" the already-highlighted top match (selected stays at 0
+// the very first time, advances on each subsequent Tab).
+function cycleSuggest(direction) {
   if (!suggest.visible || !suggest.items.length) return false;
+  const len = suggest.items.length;
+  if (suggest.cycling) {
+    suggest.selected = (suggest.selected + direction + len) % len;
+  }
+  suggest.cycling = true;
   const choice = suggest.items[suggest.selected].label;
   const before = input.value.slice(0, suggest.tokenStart);
   const after  = input.value.slice(suggest.tokenEnd);
-  // For most commands a trailing space is friendly (lets the user keep typing
-  // the argument). For zero-arity commands and prompts we don't add it.
-  const needsSpace = choice.startsWith("/") && !["/help", "/?", "/quit", "/exit", "/q", "/raw"].includes(choice);
-  const inject = choice + (needsSpace ? " " : "");
-  input.value = before + inject + after;
-  const newCursor = suggest.tokenStart + inject.length;
+  input.value = before + choice + after;
+  const newCursor = suggest.tokenStart + choice.length;
   input.setSelectionRange(newCursor, newCursor);
+  suggest.tokenEnd = newCursor;
+  // Manually grow + redraw the highlight layer — we don't go through
+  // `updateSuggest` because that would rebuild the items list with the
+  // just-replaced text and we'd lose the cycle state.
   autoResize();
-  // Re-trigger suggestions for the new context (eg. after /model picked,
-  // we might immediately want to start completing the model name).
-  updateSuggest();
+  renderSuggest();
   return true;
 }
 
+// Click on an item: jump to it (regardless of cycling state) and dismiss.
 popup.addEventListener("mousedown", (e) => {
   const target = e.target.closest(".suggest-item");
   if (!target) return;
   e.preventDefault();  // keep focus in the textarea
   suggest.selected = Number(target.dataset.i) || 0;
-  acceptSuggest();
+  suggest.cycling = true;  // already-selected means a replacement happens
+  cycleSuggest(0);
+  hideSuggest();
 });
 
 input.addEventListener("blur", () => {
@@ -644,47 +674,28 @@ input.addEventListener("blur", () => {
 });
 
 input.addEventListener("keydown", (e) => {
-  // Popup-aware navigation first.
-  if (suggest.visible) {
-    if (e.key === "ArrowDown") {
-      suggest.selected = (suggest.selected + 1) % suggest.items.length;
-      renderSuggest();
-      e.preventDefault();
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      suggest.selected = (suggest.selected - 1 + suggest.items.length) % suggest.items.length;
-      renderSuggest();
-      e.preventDefault();
-      return;
-    }
-    if (e.key === "Tab") {
-      e.preventDefault();
-      acceptSuggest();
-      return;
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      hideSuggest();
-      return;
-    }
-    // fall through — typing, Enter, etc. handled below
-  }
-
+  // Tab / Shift-Tab — popup cycling. Open the popup if it isn't already.
   if (e.key === "Tab") {
-    // Popup wasn't open — open it (and accept if there's a unique match).
     e.preventDefault();
-    updateSuggest();
-    if (suggest.visible && suggest.items.length === 1) acceptSuggest();
+    if (!suggest.visible) updateSuggest();
+    cycleSuggest(e.shiftKey ? -1 : +1);
     return;
   }
+  // Escape always dismisses the popup if it's open; otherwise harmless.
+  if (e.key === "Escape" && suggest.visible) {
+    e.preventDefault();
+    hideSuggest();
+    return;
+  }
+  // Enter submits; Shift+Enter inserts a newline (textarea default).
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     submit();
     return;
   }
-  // Arrow up/down navigate history when the popup is closed AND the cursor
-  // is on the textarea's first / last line.
+  // Arrows always do history navigation when on the edge line of the
+  // textarea — they NEVER navigate the popup. (Popup is Tab-driven so the
+  // muscle memory for readline-style up/down history stays intact.)
   if (e.key === "ArrowUp" && cursorOnFirstLine()) {
     const h = LS.history();
     if (!h.length) return;

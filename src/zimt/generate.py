@@ -84,12 +84,13 @@ def _ensure_sampler(pipe: Any, g: GenConfig) -> None:
 
     Cached via a sentinel attribute on the pipe so back-to-back generations
     with the same sampler skip the swap (which would otherwise rebuild the
-    scheduler each call).
+    scheduler each call). Model-level ``scheduler_overrides`` are merged in
+    every time — see ``apply_sampler``.
     """
     target = g.sampler or g.spec.default_sampler
     if getattr(pipe, "_zimt_sampler", None) == target:
         return
-    apply_sampler(pipe, g.spec.samplers, target)
+    apply_sampler(pipe, g.spec.samplers, target, g.spec.scheduler_overrides)
     pipe._zimt_sampler = target
 
 

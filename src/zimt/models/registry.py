@@ -11,9 +11,20 @@ from __future__ import annotations
 
 from ..buckets import SDXL_BUCKETS, ZIMAGE_BUCKETS
 from ..samplers import SDXL_SAMPLERS, ZIMAGE_SAMPLERS
-from . import illustrious, pony, zimage
+from . import community, illustrious, noobai, pony, zimage
 from .sdxl_common import tokenize_report_sdxl
 from .spec import ModelSpec
+
+# Shared negative-prompt templates so the new models can reuse rather than
+# each defining a near-duplicate string.
+_NEG_ILLUSTRIOUS = (
+    "worst quality, bad quality, low quality, lowres, jpeg artifacts, "
+    "sketch, monochrome, signature, watermark, text, blurry"
+)
+_NEG_PONY = (
+    "score_6, score_5, score_4, worst quality, low quality, jpeg artifacts, "
+    "blurry, watermark, signature, text"
+)
 
 MODELS: dict[str, ModelSpec] = {
     "z-image-turbo": ModelSpec(
@@ -56,15 +67,90 @@ MODELS: dict[str, ModelSpec] = {
         family="sdxl",
         default_steps=24,
         default_cfg=6.0,
-        default_negative=(
-            "worst quality, bad quality, low quality, lowres, jpeg artifacts, "
-            "sketch, monochrome, signature, watermark, text, blurry"
-        ),
+        default_negative=_NEG_ILLUSTRIOUS,
         resolutions=list(SDXL_BUCKETS),
         samplers=dict(SDXL_SAMPLERS),
         default_sampler="euler-a",
         score_tags=illustrious.QUALITY_PREFIX,
         load=illustrious.load,
+        tokenize_report=tokenize_report_sdxl,
+    ),
+
+    # ---- Illustrious-family community fine-tunes ----
+    "hassaku-xl-illustrious": ModelSpec(
+        name="hassaku-xl-illustrious",
+        description="Hassaku XL Illustrious v3.1 (anime-realistic Illustrious fine-tune)",
+        family="sdxl",
+        default_steps=28,
+        default_cfg=6.0,
+        default_negative=_NEG_ILLUSTRIOUS,
+        resolutions=list(SDXL_BUCKETS),
+        samplers=dict(SDXL_SAMPLERS),
+        default_sampler="euler-a",
+        score_tags=community.ILLUSTRIOUS_FAMILY_PREFIX,
+        load=community.load_hassaku,
+        tokenize_report=tokenize_report_sdxl,
+    ),
+    "wai-nsfw-illustrious": ModelSpec(
+        name="wai-nsfw-illustrious",
+        description="WAI-NSFW-Illustrious v8.0 (Illustrious-based, NSFW-focused)",
+        family="sdxl",
+        default_steps=28,
+        default_cfg=6.0,
+        default_negative=_NEG_ILLUSTRIOUS,
+        resolutions=list(SDXL_BUCKETS),
+        samplers=dict(SDXL_SAMPLERS),
+        default_sampler="euler-a",
+        score_tags=community.ILLUSTRIOUS_FAMILY_PREFIX,
+        load=community.load_wai_nsfw_illustrious,
+        tokenize_report=tokenize_report_sdxl,
+    ),
+    "noobai-xl-vpred": ModelSpec(
+        name="noobai-xl-vpred",
+        description=(
+            "NoobAI XL Vpred 1.0 (Illustrious-based, v-prediction; "
+            "needs prediction_type override since upstream config is wrong)"
+        ),
+        family="sdxl",
+        default_steps=30,
+        default_cfg=5.0,
+        default_negative=_NEG_ILLUSTRIOUS,
+        resolutions=list(SDXL_BUCKETS),
+        samplers=dict(SDXL_SAMPLERS),
+        default_sampler="euler-a",
+        score_tags=noobai.QUALITY_PREFIX,
+        scheduler_overrides=dict(noobai.SCHEDULER_OVERRIDES),
+        load=noobai.load,
+        tokenize_report=tokenize_report_sdxl,
+    ),
+    "animagine-xl-4": ModelSpec(
+        name="animagine-xl-4",
+        description="Animagine XL 4.0 (Cagliostro Lab's flagship anime SDXL)",
+        family="sdxl",
+        default_steps=28,
+        default_cfg=5.0,
+        default_negative=_NEG_ILLUSTRIOUS,
+        resolutions=list(SDXL_BUCKETS),
+        samplers=dict(SDXL_SAMPLERS),
+        default_sampler="euler-a",
+        score_tags=community.ILLUSTRIOUS_FAMILY_PREFIX,
+        load=community.load_animagine_xl_4,
+        tokenize_report=tokenize_report_sdxl,
+    ),
+
+    # ---- Pony-family community fine-tunes ----
+    "cyberrealistic-pony": ModelSpec(
+        name="cyberrealistic-pony",
+        description="CyberRealistic Pony v8.5 (Pony v6-based, photorealism focus)",
+        family="sdxl",
+        default_steps=25,
+        default_cfg=7.0,
+        default_negative=_NEG_PONY,
+        resolutions=list(SDXL_BUCKETS),
+        samplers=dict(SDXL_SAMPLERS),
+        default_sampler="euler-a",
+        score_tags=community.PONY_SCORE_PREFIX,
+        load=community.load_cyberrealistic_pony,
         tokenize_report=tokenize_report_sdxl,
     ),
 }

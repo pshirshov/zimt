@@ -40,6 +40,13 @@ class ModelSpec:
         default_factory=lambda: dict(SDXL_SAMPLERS))
     """Allowed sampler names for this model. Default sampler MUST be a key."""
     default_sampler: str = "euler-a"
+    scheduler_overrides: dict[str, Any] = field(default_factory=dict)
+    """Per-model scheduler-config overrides applied on every sampler swap.
+
+    Used for upstream mismatches — e.g. NoobAI Vpred is v-prediction but
+    ships ``prediction_type="epsilon"`` in its bundled config. Merged with
+    sampler-specific kwargs (sampler wins on conflict).
+    """
     score_tags: str = ""
     """Auto-prepended to the user's prompt unless ``/raw`` is used."""
 

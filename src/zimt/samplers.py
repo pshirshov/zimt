@@ -37,8 +37,19 @@ ZIMAGE_SAMPLERS: dict[str, SamplerEntry] = {
 }
 
 
-def apply_sampler(pipe: Any, samplers: dict[str, SamplerEntry], name: str) -> None:
+def apply_sampler(
+    pipe: Any,
+    samplers: dict[str, SamplerEntry],
+    name: str,
+    model_overrides: dict[str, Any] | None = None,
+) -> None:
     """Swap ``pipe.scheduler`` to match the named sampler.
+
+    ``model_overrides`` is merged into the from_config kwargs and applied
+    regardless of which sampler is chosen — used for model-level config
+    that the upstream repo got wrong (e.g. NoobAI Vpred is trained with
+    ``prediction_type="v_prediction"`` but its scheduler_config.json
+    ships ``epsilon``). Sampler-specific kwargs win on conflict.
 
     Raises :class:`ValueError` if the name isn't in the per-model registry.
     """
@@ -46,7 +57,7 @@ def apply_sampler(pipe: Any, samplers: dict[str, SamplerEntry], name: str) -> No
         raise ValueError(
             f"unknown sampler {name!r}; available: {', '.join(samplers)}"
         )
-    cls_name, extra_kwargs = samplers[name]
+    cls_name, sampler_kwargs = samplers[name]
     import diffusers  # type: ignore[import-not-found]
     cls = getattr(diffusers, cls_name, None)
     if cls is None:
@@ -55,4 +66,6 @@ def apply_sampler(pipe: Any, samplers: dict[str, SamplerEntry], name: str) -> No
             "either the diffusers version is too old, or the sampler "
             "table needs updating."
         )
-    pipe.scheduler = cls.from_config(pipe.scheduler.config, **extra_kwargs)
+    merged: dict[str, Any] = dict(model_overrides or {})
+    merged.update(sampler_kwargs)
+    pipe.scheduler = cls.from_config(pipe.scheduler.config, **merged)

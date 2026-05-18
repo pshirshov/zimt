@@ -6,8 +6,18 @@ backend-agnostic (XPU / CUDA / ROCm / CPU). Models currently supported:
 | name | source | notes |
 |---|---|---|
 | `z-image-turbo` | `Tongyi-MAI/Z-Image-Turbo` | 6B DiT, Qwen3-4B text encoder, CFG=0 |
-| `pony-v6-xl` | `kitty7779/ponyDiffusionV6XL` (diffusers mirror) | SDXL fine-tune, Euler-a, score-tag prefix, fp16-fix VAE |
-| `illustrious-xl-v1` | `WhiteAiZ/Illustrious-xl-v1.0` (diffusers mirror) | anime-focused SDXL fine-tune |
+| `pony-v6-xl` | `kitty7779/ponyDiffusionV6XL` | SDXL fine-tune, score-tag prefix, fp16-fix VAE |
+| `illustrious-xl-v1` | `WhiteAiZ/Illustrious-xl-v1.0` | anime-focused SDXL fine-tune |
+| `hassaku-xl-illustrious` | `John6666/hassaku-xl-illustrious-v31-sdxl` | Illustrious-family, anime-realistic |
+| `wai-nsfw-illustrious` | `John6666/wai-nsfw-illustrious-v80-sdxl` | Illustrious-family, NSFW-focused |
+| `noobai-xl-vpred` | `Laxhar/noobai-XL-Vpred-1.0` | Illustrious-family, **v-prediction** — needs `scheduler_overrides` (handled) |
+| `animagine-xl-4` | `cagliostrolab/animagine-xl-4.0` | Cagliostro's flagship anime SDXL |
+| `cyberrealistic-pony` | `John6666/cyberrealistic-pony-v85-sdxl` | Pony-family, photorealism focus |
+
+The fp16-fix VAE is wired through a shared `make_sdxl_loader` factory
+(`src/zimt/models/sdxl_factory.py`), so adding another SDXL fine-tune is
+typically two lines (a `make_sdxl_loader("hf/repo")` plus a `ModelSpec`
+entry).
 
 The codebase is a single Python package (`src/zimt/`) with two entry modes
 sharing the same command parser, so anything you can do in the CLI

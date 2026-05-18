@@ -12,13 +12,17 @@
       <h1>zimt</h1>
       <span id="ws-state" class="pill">disconnected</span>
       <span id="model-state" class="pill">no model</span>
+      <span id="gpu-stats" class="pill gpu-pill" title=""></span>
     </div>
 
     <div class="prompt-bar">
       <div class="prompt-row">
-        <textarea id="prompt-input" rows="1" autocomplete="off" autocapitalize="off"
-                  spellcheck="false" autofocus
-                  placeholder="type a prompt, or /command (Tab to complete, ↑/↓ history, Shift+Enter for newline) — e.g. /model pony-v6-xl /steps 25 cute anime girl"></textarea>
+        <div class="textarea-wrap">
+          <pre id="prompt-highlight" class="prompt-highlight" aria-hidden="true"></pre>
+          <textarea id="prompt-input" rows="1" autocomplete="off" autocapitalize="off"
+                    spellcheck="false" autofocus
+                    placeholder="type a prompt, or /command (Tab to complete, ↑/↓ history, Shift+Enter for newline) — e.g. /model pony-v6-xl /steps 25 cute anime girl"></textarea>
+        </div>
         <button id="btn-generate" class="gen-btn" title="generate (Enter)">gen</button>
       </div>
       <div class="log-row">

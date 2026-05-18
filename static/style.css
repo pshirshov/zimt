@@ -49,23 +49,56 @@
   .log-row > #btn-clear-log { flex: 0 0 auto; opacity: 0.55; align-self: flex-start; }
   .log-row > #btn-clear-log:hover { opacity: 1; }
   .log-row > #log:empty + #btn-clear-log { display: none; }
-  /* Textarea + gen button side-by-side. Button stretches to match the
-     textarea's auto-grown height. */
+  /* Prompt row: a textarea-wrap (stack of <pre> highlight mirror + textarea)
+     and the Gen button. The wrap controls width/height; the absolute-
+     positioned children overlay perfectly because they share font/padding. */
   .prompt-row { display: flex; gap: 8px; align-items: stretch; }
-  .prompt-row > textarea { flex: 1 1 auto; }
+  .textarea-wrap { position: relative; flex: 1 1 auto; min-width: 0;
+    min-height: 2.5em; }
   .gen-btn { flex: 0 0 auto; padding: 0 18px; font-weight: 600;
     background: var(--accent); color: #fff; border-color: transparent; }
   .gen-btn:hover { filter: brightness(1.1); }
   .gen-btn:active { filter: brightness(0.95); }
 
-  .prompt-bar textarea {
-    width: 100%; padding: 10px 12px;
-    font-family: ui-monospace, monospace; line-height: 1.4;
-    resize: none;                /* JS-driven auto-resize, no user grip */
-    overflow-y: auto;            /* show scrollbar once max-height is hit */
-    min-height: 2.5em; max-height: 16em;
+  /* These two MUST share font + padding + border so caret positions line
+     up perfectly between the textarea (interaction) and the pre (paint). */
+  .prompt-highlight, .prompt-bar textarea {
+    margin: 0;
+    padding: 10px 12px;
+    font: 14px/1.4 ui-monospace, monospace;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-sizing: border-box;
     white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: break-word;
   }
+  .prompt-highlight {
+    position: absolute; inset: 0;
+    background: var(--panel); color: var(--fg);
+    pointer-events: none; overflow: hidden;
+    z-index: 0;
+  }
+  .prompt-bar textarea {
+    position: absolute; inset: 0;
+    background: transparent; color: transparent;
+    caret-color: var(--fg);
+    resize: none; overflow-y: auto;
+    min-height: 2.5em; max-height: 16em;
+    z-index: 1;
+  }
+
+  /* Syntax-highlight token colours. Kept loud — this is a power-user input. */
+  .hl-cmd { color: var(--accent); font-weight: 600; }
+  .hl-model { color: #7ad17a; }
+  .hl-sampler { color: #b5d17a; }
+  .hl-num { color: #e6c66a; }
+  .hl-flag { color: var(--accent); }
+  .hl-neg { color: #c77; }
+  .hl-unknown-cmd { color: var(--error); text-decoration: underline wavy; }
+
+  /* GPU stats pill sits on the right edge of the topbar. */
+  .gpu-pill { margin-left: auto; font-family: ui-monospace, monospace; }
   .left-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }
 
   /* Right pane: header stays put, only thumbnails scroll. */

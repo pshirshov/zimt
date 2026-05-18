@@ -82,6 +82,33 @@ async def _exec_setting(
             g.width, g.height = picked
             log.append(f"size = {picked[0]}x{picked[1]}")
             await emit_state()
+    elif cmd == "/sampler":
+        name = (args[0] if args else "").strip()
+        if not name:
+            log.append(
+                f"sampler = {g.sampler or g.spec.default_sampler}  "
+                f"(available: {', '.join(sorted(g.spec.samplers))})"
+            )
+        elif name not in g.spec.samplers:
+            log.append(f"/sampler: unknown {name!r}; "
+                       f"available: {', '.join(sorted(g.spec.samplers))}")
+        else:
+            g.sampler = name
+            log.append(f"sampler = {name}")
+            await emit_state()
+    elif cmd == "/clip_skip":
+        try:
+            n = int(args[0])
+            if n < 0 or n > 12:
+                log.append("/clip_skip: expected 0..12")
+            else:
+                g.clip_skip = n
+                log.append(f"clip_skip = {n}")
+                if g.spec.family != "sdxl":
+                    log.append(f"(clip_skip is SDXL-only; ignored for family={g.spec.family})")
+                await emit_state()
+        except (ValueError, IndexError):
+            log.append("/clip_skip: expected int")
     elif cmd == "/negprompt":
         text = args[0] if args else ""
         if text == "" or text == "-":
@@ -116,6 +143,8 @@ _HELP_LINES = [
     "  /steps N               num inference steps",
     "  /size W H              set width × height",
     "  /res <N|WxH>           preset index or explicit",
+    "  /sampler <name>        switch scheduler (model-specific)",
+    "  /clip_skip N           SDXL only — skip top N CLIP layers (0=off)",
     "  /model <name>          load a model",
     "  /tokenize <text>       show per-encoder token analysis",
     "multiple commands may be combined on one line, e.g.",

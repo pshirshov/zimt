@@ -20,6 +20,8 @@ dependencies = [
   "safetensors",
   "fastapi",
   "uvicorn",
+  # Prompt weighting for SDXL — optional at runtime; the import is wrapped.
+  "compel",
 ]
 
 [project.scripts]

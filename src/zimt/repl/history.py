@@ -23,7 +23,8 @@ def _save_history() -> None:
 
 
 def _completer(text: str, state: int) -> str | None:
-    """Cycle through commands at the start, model names after ``/model``."""
+    """Cycle through commands at the start; model / sampler names after
+    ``/model`` / ``/sampler``."""
     line = readline.get_line_buffer()
     begidx = readline.get_begidx()
     prefix = line[:begidx]
@@ -36,6 +37,13 @@ def _completer(text: str, state: int) -> str | None:
         cmd = prefix.split()[0]
         if cmd == "/model":
             opts = [m for m in MODELS if m.startswith(text)]
+        elif cmd == "/sampler":
+            # Union of every model's sampler set — we don't track which model
+            # is loaded from this layer, so we offer the lot.
+            seen: set[str] = set()
+            for spec in MODELS.values():
+                seen.update(spec.samplers)
+            opts = [s for s in sorted(seen) if s.startswith(text)]
         else:
             opts = []
 

@@ -62,9 +62,12 @@ class AppState:
             "model": self.g.spec.name if self.g else None,
             "models": [
                 {"name": n, "description": m.description,
+                 "family": m.family,
                  "score_tags": m.score_tags,
                  "default_steps": m.default_steps,
                  "default_cfg": m.default_cfg,
+                 "default_sampler": m.default_sampler,
+                 "samplers": sorted(m.samplers),
                  "resolutions": [
                      {"w": w, "h": h, "label": label}
                      for w, h, label in m.resolutions
@@ -78,6 +81,8 @@ class AppState:
                 "height": self.g.height if self.g else None,
                 "negative_prompt": self.g.negative_prompt if self.g else None,
                 "score_tags": self.g.spec.score_tags if self.g else None,
+                "sampler": (self.g.sampler or self.g.spec.default_sampler) if self.g else None,
+                "clip_skip": self.g.clip_skip if self.g else None,
             },
         }
 

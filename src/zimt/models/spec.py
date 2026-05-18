@@ -11,9 +11,12 @@ attribute-soup classes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from ..buckets import Resolution, SDXL_BUCKETS
+from ..samplers import SDXL_SAMPLERS, SamplerEntry
+
+Family = Literal["sdxl", "zimage"]
 
 
 @dataclass
@@ -23,7 +26,20 @@ class ModelSpec:
     default_steps: int
     default_cfg: float
     default_negative: str
+    family: Family = "sdxl"
+    """Text-encoder architecture family.
+
+    ``sdxl`` — two CLIP encoders. Supports compel prompt weighting and the
+    ``clip_skip`` pipeline kwarg.
+    ``zimage`` — single Qwen3 encoder. Compel doesn't have an adapter for
+    this family, and clip_skip is a no-op (Z-Image uses penultimate
+    hidden states by default).
+    """
     resolutions: list[Resolution] = field(default_factory=lambda: list(SDXL_BUCKETS))
+    samplers: dict[str, SamplerEntry] = field(
+        default_factory=lambda: dict(SDXL_SAMPLERS))
+    """Allowed sampler names for this model. Default sampler MUST be a key."""
+    default_sampler: str = "euler-a"
     score_tags: str = ""
     """Auto-prepended to the user's prompt unless ``/raw`` is used."""
 

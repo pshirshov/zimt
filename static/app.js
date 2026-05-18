@@ -44,6 +44,7 @@ function connectWs() {
       for (const id of m.ids) jobs.delete(id);
       renderQueue();
     }
+    else if (m.type === "gpu_stats") onGpuStats(m.stats);
     else if (m.type === "log") appendLog(m.message, m.level);
     else if (m.type === "model_loading") appendLog(`loading ${m.model}…`);
     else if (m.type === "model_loaded")  appendLog(`loaded ${m.model}`);
@@ -75,6 +76,7 @@ function fmtState(s) {
     `cfg:   ${st.cfg}`,
     `steps: ${st.steps}`,
     `size:  ${sz}`,
+    `sampler: ${st.sampler ?? "?"}    clip_skip: ${st.clip_skip ?? 0}`,
     `negprompt: ${JSON.stringify(st.negative_prompt ?? "")}`,
   ];
   if (st.score_tags) lines.push(`auto-prefix: ${JSON.stringify(st.score_tags)}`);
@@ -292,7 +294,8 @@ function openModal(entry) {
   $("modal-img").src = `/api/outputs/${encodeURIComponent(entry.name)}`;
   const grid = $("modal-meta"); grid.innerHTML = "";
   const keys = ["model", "raw_prompt", "prompt", "negative_prompt", "seed",
-                "steps", "cfg", "width", "height", "dtype", "device"];
+                "steps", "cfg", "sampler", "clip_skip",
+                "width", "height", "dtype", "device"];
   const meta = entry.metadata || {};
   for (const k of keys) {
     if (!(k in meta)) continue;
@@ -318,6 +321,8 @@ $("modal-restore").onclick = () => {
   if (meta.model) parts.push(`/model ${meta.model}`);
   if (meta.cfg)   parts.push(`/cfg ${meta.cfg}`);
   if (meta.steps) parts.push(`/steps ${meta.steps}`);
+  if (meta.sampler) parts.push(`/sampler ${meta.sampler}`);
+  if (meta.clip_skip && Number(meta.clip_skip) > 0) parts.push(`/clip_skip ${meta.clip_skip}`);
   if (meta.width && meta.height) parts.push(`/size ${meta.width} ${meta.height}`);
   if (meta.negative_prompt != null) parts.push(`/negprompt ${meta.negative_prompt}`);
   if (meta.seed)  parts.push(`/seed ${meta.seed}`);
@@ -365,13 +370,95 @@ function completionPool(value, tokStart, tokText) {
   return [];
 }
 
-// Auto-grow the textarea to fit its contents, up to the CSS max-height.
+// Auto-grow the textarea wrap (which sizes the absolute-positioned overlay)
+// to fit the content. Also re-renders the syntax-highlighted mirror.
+const inputWrap = document.querySelector(".textarea-wrap");
+const highlight = $("prompt-highlight");
+
 function autoResize() {
   input.style.height = "auto";
-  input.style.height = input.scrollHeight + "px";
+  const h = input.scrollHeight;
+  input.style.height = h + "px";
+  inputWrap.style.height = h + "px";
+  highlight.style.height = h + "px";
+  renderHighlight();
 }
 input.addEventListener("input", autoResize);
+input.addEventListener("scroll", () => { highlight.scrollTop = input.scrollTop; });
 window.addEventListener("resize", autoResize);
+
+// ---------- prompt syntax highlighting ----------
+// Command → arg-spec: {n: fixedN, greedy: true|false}
+const HL_CMDS = {
+  "/help": {n: 0}, "/?": {n: 0}, "/quit": {n: 0}, "/exit": {n: 0}, "/q": {n: 0},
+  "/raw": {n: 0},
+  "/model": {n: 1, cls: "hl-model"},
+  "/sampler": {n: 1, cls: "hl-sampler"},
+  "/cfg": {n: 1, cls: "hl-num"},
+  "/steps": {n: 1, cls: "hl-num"},
+  "/seed": {n: 1, cls: "hl-num"},
+  "/clip_skip": {n: 1, cls: "hl-num"},
+  "/res": {n: 1, cls: "hl-num"},
+  "/size": {n: 2, cls: "hl-num"},
+  "/many": {n: 1, cls: "hl-num", thenGreedy: true},
+  "/negprompt": {greedy: true, cls: "hl-neg"},
+  "/tokenize": {greedy: true},
+};
+
+function esc(s) {
+  return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+
+function renderHighlight() {
+  const text = input.value;
+  if (text === "") { highlight.innerHTML = "&nbsp;"; return; }
+  // Tokenize keeping whitespace so the rendered string preserves the user's
+  // exact formatting and the caret aligns with what they typed.
+  const parts = text.split(/(\s+)/);
+  let out = "";
+  let argsLeft = 0;
+  let argClass = "";
+  let greedyClass = null;
+  for (const p of parts) {
+    if (/^\s+$/.test(p)) { out += p; continue; }
+    if (p === "") continue;
+    if (p in HL_CMDS) {
+      const spec = HL_CMDS[p];
+      out += `<span class="hl-cmd">${esc(p)}</span>`;
+      if (spec.greedy) {
+        greedyClass = spec.cls || "";
+        argsLeft = 0;
+      } else {
+        argsLeft = spec.n;
+        argClass = spec.cls || "";
+        if (spec.thenGreedy) {
+          // /many: N is one arg, then prompt is free-form (no highlight).
+          // We render N as num, then drop out of arg mode.
+        }
+      }
+      continue;
+    }
+    // Token that *looks* like a command but isn't recognised.
+    if (p.startsWith("/")) {
+      out += `<span class="hl-unknown-cmd">${esc(p)}</span>`;
+      continue;
+    }
+    if (greedyClass !== null) {
+      out += greedyClass ? `<span class="${greedyClass}">${esc(p)}</span>` : esc(p);
+      continue;
+    }
+    if (argsLeft > 0) {
+      out += argClass ? `<span class="${argClass}">${esc(p)}</span>` : esc(p);
+      argsLeft -= 1;
+      continue;
+    }
+    // Free-form prompt text — default colour.
+    out += esc(p);
+  }
+  // Trailing newline guards against the browser collapsing the final line.
+  if (text.endsWith("\n")) out += "\n";
+  highlight.innerHTML = out;
+}
 
 function cursorOnFirstLine() {
   return input.value.lastIndexOf("\n", input.selectionStart - 1) === -1;
@@ -504,10 +591,29 @@ async function apiPost(path, body) {
 }
 
 // ---------- init ----------
+// ---------- GPU stats pill ----------
+function fmtGiB(bytes) { return (bytes / (1024**3)).toFixed(1); }
+function onGpuStats(s) {
+  const el = $("gpu-stats");
+  if (!s) { el.textContent = ""; el.title = ""; return; }
+  const dev = (s.device || "").replace(/^Intel\(R\) /, "").replace(/ Graphics$/, "");
+  if (s.total_bytes > 0) {
+    const pct = Math.round(100 * s.allocated_bytes / s.total_bytes);
+    el.textContent = `${dev}  ${fmtGiB(s.allocated_bytes)}/${fmtGiB(s.total_bytes)} GB`;
+    el.title = `allocated ${fmtGiB(s.allocated_bytes)} GB  ·  `
+             + `reserved ${fmtGiB(s.reserved_bytes)} GB  ·  `
+             + `total ${fmtGiB(s.total_bytes)} GB  (${pct}%)`;
+  } else {
+    el.textContent = `${dev}  ${fmtGiB(s.allocated_bytes)} GB`;
+    el.title = `RSS ${fmtGiB(s.allocated_bytes)} GB`;
+  }
+}
+
 async function init() {
   renderRecent();
   setupSplitter();
   autoResize();
+  renderHighlight();
   connectWs();
   try {
     const s = await (await fetch("/api/state")).json();

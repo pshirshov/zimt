@@ -19,6 +19,8 @@ Arity = int | Literal["GREEDY", "MANY"]
 COMMAND_ARITY: dict[str, Arity] = {
     "/help": 0, "/?": 0, "/quit": 0, "/exit": 0, "/q": 0,
     "/model": 1, "/cfg": 1, "/steps": 1, "/seed": 1, "/res": 1,
+    "/clip_skip": 1,
+    "/sampler": 1,
     "/size": 2,
     "/raw": 0,
     "/many": "MANY",

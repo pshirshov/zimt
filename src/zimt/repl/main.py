@@ -26,6 +26,8 @@ def _help() -> None:
     print("  /steps [N]           set num inference steps")
     print("  /size [W H]          set output (width height) — free form")
     print("  /res [N | WxH]       pick a model-preset resolution by index or set explicitly")
+    print("  /sampler <name>      switch scheduler (model-specific; tab-complete)")
+    print("  /clip_skip N         SDXL only — skip top N CLIP layers (0=off, 2=Pony default)")
     print("  /model [name]        switch model; bare lists available")
     print("  /tokenize <text>     show per-encoder tokenization heuristics")
     print("  /help                show this")
@@ -38,8 +40,10 @@ def _print_state(g: GenConfig) -> None:
         (label for w, h, label in g.spec.resolutions if (w, h) == (g.width, g.height)),
         "custom",
     )
+    sampler = g.sampler or g.spec.default_sampler
     print(f"  model={g.spec.name}  cfg={g.cfg}  steps={g.steps}  "
           f"size={g.width}x{g.height} [{preset}]")
+    print(f"  sampler={sampler}  clip_skip={g.clip_skip}")
     print(f"  negprompt={g.negative_prompt!r}")
     if g.spec.score_tags:
         print(f"  auto-prefix={g.spec.score_tags!r}")
@@ -221,6 +225,29 @@ def _apply_setting(cmd: str, args: list[str], g: GenConfig) -> None:
         else:
             g.width, g.height = picked
             print(f"size = {g.width}x{g.height}")
+    elif cmd == "/sampler":
+        name = (args[0] if args else "").strip()
+        if not name:
+            print(f"current sampler = {g.sampler or g.spec.default_sampler}")
+            print(f"available for {g.spec.name}: {', '.join(sorted(g.spec.samplers))}")
+            return
+        if name not in g.spec.samplers:
+            print(f"unknown sampler {name!r}; available: {', '.join(sorted(g.spec.samplers))}")
+            return
+        g.sampler = name
+        print(f"sampler = {name}")
+    elif cmd == "/clip_skip":
+        try:
+            n = int(args[0])
+            if n < 0 or n > 12:
+                print("/clip_skip: expected 0..12")
+                return
+            g.clip_skip = n
+            if g.spec.family != "sdxl":
+                print(f"(clip_skip is SDXL-only; ignored for family={g.spec.family})")
+            print(f"clip_skip = {g.clip_skip}")
+        except (ValueError, IndexError):
+            print("usage: /clip_skip <int>")
     elif cmd == "/negprompt":
         text = args[0] if args else ""
         if text == "" or text == "-":

@@ -50,10 +50,17 @@ Multi-command lines compose left-to-right; greedy commands (`/negprompt`,
 | `/seed N` | pin seed for the next generation |
 | `/cfg X` / `/steps N` / `/size W H` | numeric settings |
 | `/res N` / `/res WxH` | pick a model-preset resolution or set explicitly |
+| `/sampler <name>` | swap scheduler. SDXL: euler, euler-a, dpmpp-2m, dpmpp-2m-karras, dpmpp-sde, dpmpp-sde-karras, heun, unipc, lms, ddim. Z-Image: flow-match-euler. |
+| `/clip_skip N` | SDXL only — skip top N CLIP layers (0=off; Pony was trained with 2) |
 | `/negprompt …` / `/negprompt -` | set / clear negative prompt |
 | `/model <name>` | swap the loaded model (no-op if already loaded) |
 | `/tokenize <text>` | per-encoder token analysis + budget headroom |
 | `/help` / `/quit` | help / leave |
+
+Prompts may use **A1111/compel weighting syntax** on SDXL models —
+`(red hair:1.4)`, `(detailed)+`, `[loose]-`. zimt auto-detects the
+syntax and routes through compel for SDXL; Z-Image falls back to plain
+strings (compel doesn't have a Qwen3 adapter).
 
 Tab-completion works in both modes — `/m<TAB>` cycles `/model`/`/many`,
 `/model <TAB>` cycles registered model names. Up/Down navigates prompt

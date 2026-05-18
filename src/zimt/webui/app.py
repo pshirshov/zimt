@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
+from .. import gpu_stats
 from ..models.registry import MODELS
 from ..paths import FAV_DIR, OUT_DIR, STATIC_DIR, ensure_dirs
 from .exec_api import ExecBody, api_exec as exec_handler
@@ -39,6 +40,34 @@ class _NoCacheStaticFiles(StaticFiles):
 
 # Mount static after STATIC_DIR is set up via paths.py.
 app.mount("/static", _NoCacheStaticFiles(directory=STATIC_DIR), name="static")
+
+
+# ---------------------------------------------------------------------------
+# GPU stats: a small background task broadcasts memory usage every ~2s
+# (only while at least one WebSocket client is connected — no cost when
+# nobody's looking).
+# ---------------------------------------------------------------------------
+
+async def _gpu_stats_loop() -> None:
+    import asyncio
+    while True:
+        try:
+            if STATE.clients:
+                await broadcast({"type": "gpu_stats", "stats": gpu_stats.current()})
+        except Exception:
+            pass
+        await asyncio.sleep(2.0)
+
+
+@app.on_event("startup")
+async def _start_gpu_stats() -> None:
+    import asyncio
+    asyncio.create_task(_gpu_stats_loop())
+
+
+@app.get("/api/gpu_stats")
+async def api_gpu_stats() -> dict[str, Any]:
+    return dict(gpu_stats.current())
 
 
 @app.get("/")

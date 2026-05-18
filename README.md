@@ -5,7 +5,7 @@ backend-agnostic (XPU / CUDA / ROCm / CPU).
 
 Graphs? Workflows? Repositories full of shit? You don't need that anymore.
 
-Need a customization? A new model? Ask Claude, it will bake the shit in for you.
+Need a customization? A new model? A your own, very specific workflow? Ask Claude, it will bake the shit in for you.
 
 <img width="1954" height="1678" alt="image" src="https://github.com/user-attachments/assets/eff91206-9793-4860-9f40-0c58a9f143ad" />
 

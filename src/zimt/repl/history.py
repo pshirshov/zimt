@@ -2,7 +2,7 @@
 
 Importing :mod:`readline` already hooks ``input()`` — this module just
 sets up the on-disk history file and installs a completer that knows the
-command set + the currently-registered model names.
+command set + finite argument sets such as models, samplers, and resolutions.
 """
 
 from __future__ import annotations
@@ -15,6 +15,9 @@ from ..paths import HISTORY_PATH
 from .commands import COMMANDS
 
 
+_ORIENTATION_RESOLUTIONS = ("square", "landscape", "portrait")
+
+
 def _save_history() -> None:
     try:
         readline.write_history_file(HISTORY_PATH)
@@ -22,30 +25,59 @@ def _save_history() -> None:
         pass
 
 
+def _model_for_context(tokens: list[str]) -> str | None:
+    for i in range(len(tokens) - 2, -1, -1):
+        if tokens[i] != "/model":
+            continue
+        name = tokens[i + 1]
+        if name in MODELS:
+            return name
+    return None
+
+
+def _sampler_options(tokens: list[str], text: str) -> list[str]:
+    model = _model_for_context(tokens)
+    if model is not None:
+        opts = sorted(MODELS[model].samplers)
+    else:
+        seen: set[str] = set()
+        for spec in MODELS.values():
+            seen.update(spec.samplers)
+        opts = sorted(seen)
+    return [s for s in opts if s.startswith(text)]
+
+
+def _resolution_options(tokens: list[str], text: str) -> list[str]:
+    model = _model_for_context(tokens)
+    specs = [MODELS[model]] if model is not None else list(MODELS.values())
+    seen: set[str] = set(_ORIENTATION_RESOLUTIONS)
+    for spec in specs:
+        for w, h, _label in spec.resolutions:
+            seen.add(f"{w}x{h}")
+    return [r for r in sorted(seen) if r.startswith(text)]
+
+
+def _completion_options(line: str, begidx: int, text: str) -> list[str]:
+    prefix = line[:begidx]
+    tokens = prefix.split()
+    prev = tokens[-1] if tokens else ""
+
+    if text.startswith("/"):
+        return [c for c in COMMANDS if c.startswith(text)]
+    if prev == "/model":
+        return [m for m in MODELS if m.startswith(text)]
+    if prev == "/sampler":
+        return _sampler_options(tokens, text)
+    if prev == "/res":
+        return _resolution_options(tokens, text)
+    return []
+
+
 def _completer(text: str, state: int) -> str | None:
-    """Cycle through commands at the start; model / sampler names after
-    ``/model`` / ``/sampler``."""
+    """Cycle through commands or finite argument values at the cursor."""
     line = readline.get_line_buffer()
     begidx = readline.get_begidx()
-    prefix = line[:begidx]
-
-    if not prefix.strip():
-        if not text.startswith("/"):
-            return None
-        opts = [c for c in COMMANDS if c.startswith(text)]
-    else:
-        cmd = prefix.split()[0]
-        if cmd == "/model":
-            opts = [m for m in MODELS if m.startswith(text)]
-        elif cmd == "/sampler":
-            # Union of every model's sampler set — we don't track which model
-            # is loaded from this layer, so we offer the lot.
-            seen: set[str] = set()
-            for spec in MODELS.values():
-                seen.update(spec.samplers)
-            opts = [s for s in sorted(seen) if s.startswith(text)]
-        else:
-            opts = []
+    opts = _completion_options(line, begidx, text)
 
     return opts[state] if state < len(opts) else None
 

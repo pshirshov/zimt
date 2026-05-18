@@ -1,9 +1,7 @@
 # NixOS module for the zimt image-generation web service.
 #
-# Provides ``smind.services.zimt.*`` options. The ``gpuSupport`` enum selects
-# both the package variant (xpu / cuda / rocm / cpu) and, on XPU, auto-wires
-# the host's Battlemage L0 → OpenCL UR bypass env vars when the consuming
-# host already configures ``smind.hw.intel.gpu.xpu.openclBackend.enable``.
+# Provides ``smind.services.zimt.*`` options. The ``gpuSupport`` enum
+# selects the package variant (xpu / cuda / rocm / cpu).
 #
 # Secret handling: the HuggingFace token is loaded via systemd
 # ``LoadCredential`` so the file path itself stays in the unit but the
@@ -19,16 +17,6 @@ let
     else if cfg.gpuSupport == "cuda" then zimtPackages.zimt-cuda
     else if cfg.gpuSupport == "rocm" then zimtPackages.zimt-rocm
     else                             zimtPackages.zimt-cpu;
-
-  # Pull the XPU OpenCL-bypass env attrset from the host's intel-gpu module
-  # if it's configured. Missing => empty attrset.
-  hostXpuEnv =
-    if cfg.gpuSupport == "xpu"
-       && lib.hasAttrByPath
-            [ "smind" "hw" "intel" "gpu" "xpu" "openclBackend" "serviceEnvironment" ]
-            config
-    then config.smind.hw.intel.gpu.xpu.openclBackend.serviceEnvironment
-    else {};
 
   hasTokenFile = cfg.hfTokenFile != null;
   hasWebAuthTokenFile = cfg.webAuthTokenFile != null;
@@ -66,9 +54,8 @@ in
       default = "cpu";
       description = ''
         Which torch backend to run.
-          * ``xpu``  — Intel Arc / Battlemage. Auto-pulls the L0 → OpenCL
-            bypass env if ``smind.hw.intel.gpu.xpu.openclBackend.enable`` is
-            on at the host level.
+          * ``xpu``  — Intel Arc / Battlemage. Vendored torch+xpu wheel set
+            (see ``nix/wheels-xpu.nix``).
           * ``cuda`` — NVIDIA. Uses ``python.pkgs.torchWithCuda`` from
             nixpkgs; host must allow unfree.
           * ``rocm`` — AMD. Uses ``python.pkgs.torchWithRocm``.
@@ -166,8 +153,7 @@ in
       '';
       description = ''
         Additional env vars for the systemd unit. Merged on top of the
-        zimt-managed env (``ZIMT_OUT_DIR``, ``HF_HOME``, and the XPU bypass
-        triplet if applicable); user values win.
+        zimt-managed env (``ZIMT_OUT_DIR``, ``HF_HOME``); user values win.
       '';
     };
   };
@@ -194,7 +180,7 @@ in
       environment = {
         ZIMT_OUT_DIR = cfg.outDir;
         HF_HOME = cfg.hfCacheDir;
-      } // hostXpuEnv // cfg.extraEnvironment;
+      } // cfg.extraEnvironment;
 
       serviceConfig = {
         Type = "exec";
@@ -243,8 +229,8 @@ in
         LockPersonality = true;
         RestrictRealtime = true;
         SystemCallArchitectures = "native";
-        # Memory-exec must be left on: PyTorch/Triton JIT and the LD_PRELOAD
-        # shim both mmap PROT_WRITE|PROT_EXEC pages.
+        # Memory-exec must be left on: PyTorch/Triton JIT mmaps
+        # PROT_WRITE|PROT_EXEC pages.
         MemoryDenyWriteExecute = false;
 
         PrivateDevices = false;

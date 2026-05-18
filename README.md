@@ -38,8 +38,8 @@ web UI's prompt box too.
 
 ## Quick start (dev tree)
 
-`run.sh` is the development entry point. It sets up the Intel XPU bypass
-env and execs the Python entrypoint:
+`run.sh` is the development entry point. It activates the project venv
+and execs the Python entrypoint:
 
 ```sh
 ./run.sh                       # CLI REPL
@@ -189,11 +189,13 @@ Options:
 | `user` / `group` | str | `zimt` / `zimt` | system user with `render` / `video` groups for `/dev/dri/*` |
 | `extraEnvironment` | attrs of str | `{}` | merged on top of zimt-managed env |
 
-When `gpuSupport = "xpu"` and the host already has
-`smind.hw.intel.gpu.xpu.openclBackend.enable = true`, the bypass triplet
-(`LD_PRELOAD` + `ONEAPI_DEVICE_SELECTOR` + `OCL_ICD_VENDORS`) is auto-merged
-into the unit. Without it, NEO's L0 driver init aborts on the first
-`GEM_USERPTR` allocation (intel/compute-runtime#922).
+The XPU path requires the Intel Graphics Compiler (IGC) to be reachable
+from `libze_intel_gpu.so.1`. On NixOS this means either having IGC on
+`libze_intel_gpu.so.1`'s RPATH (set in the `intel-compute-runtime`
+derivation's `postFixup`) or on the loader search path (e.g. via
+`/run/opengl-driver/lib`). Without it, NEO's Level Zero driver aborts
+during eager device init (the failure surfaces in
+`gmm_helper/resource_info.cpp`).
 
 ## Repository layout
 
@@ -243,10 +245,12 @@ zimt/
   bundled SDXL VAE has the SD 1.x `scaling_factor` 0.18215 and isn't
   fp16-stable). `models/pony.py` and `models/illustrious.py` substitute
   `madebyollin/sdxl-vae-fp16-fix` automatically.
-* **First Battlemage generation hangs / crashes** — your XPU bypass isn't
-  active. On the host, enable `smind.hw.intel.gpu.xpu.openclBackend.enable`.
-  Manually, set the three env vars (`LD_PRELOAD`, `ONEAPI_DEVICE_SELECTOR`,
-  `OCL_ICD_VENDORS`) from `run.sh`.
+* **NEO aborts at `gmm_helper/resource_info.cpp` on first XPU op** —
+  Level Zero is failing to dlopen the Intel Graphics Compiler. Ensure IGC
+  is on `libze_intel_gpu.so.1`'s RPATH (patch `intel-compute-runtime`'s
+  `postFixup` in your nixpkgs overlay) or on the loader search path
+  (e.g. `LD_LIBRARY_PATH=${intel-graphics-compiler}/lib`). Confirm with
+  `zeInit` returning `0x0` and `torch.xpu.device_count() >= 1`.
 * **`nix flake check` fails on `zimt-cuda`** — expected without
   `NIXPKGS_ALLOW_UNFREE=1`; `cuda_nvcc` is unfree.
 * **Inline preview doesn't appear in tmux** — add

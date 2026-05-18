@@ -31,3 +31,15 @@ test("/sampler argument completion uses loaded model samplers", () => {
     .map((item) => item.label);
   assert.deepEqual(labels, ["euler", "euler-a"]);
 });
+
+test("/sampler argument completion honors model selected earlier in same line", () => {
+  const value = "/model pony-v6-xl /sampler ";
+  const token = tokenAtCursor(value, value.length);
+  const labels = completionItems(
+    value,
+    token.start,
+    token.text,
+    { ...appState, loaded: false, model: null },
+  ).map((item) => item.label);
+  assert.deepEqual(labels, ["euler", "euler-a", "dpmpp-2m"]);
+});

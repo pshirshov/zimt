@@ -602,6 +602,16 @@ function cycleSuggest(direction) {
   return true;
 }
 
+function moveSuggestSelection(direction) {
+  if (!suggest.visible || !suggest.items.length) return false;
+  suggest.selected = popupArrowSelection(
+    suggest.selected, suggest.items.length, direction < 0 ? "ArrowUp" : "ArrowDown",
+  );
+  suggest.cycling = false;
+  renderSuggest();
+  return true;
+}
+
 // "Commit" — used by Enter and click. Inserts the highlighted item AND a
 // trailing space for /commands that take arguments, then dismisses the
 // popup. For /cmd accepts the popup re-opens immediately at the new
@@ -694,6 +704,11 @@ input.addEventListener("keydown", (e) => {
   // boundaries: start + Up enters older prompt history, end + Down returns
   // toward the current draft.
   if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    if (suggest.visible) {
+      e.preventDefault();
+      moveSuggestSelection(e.key === "ArrowUp" ? -1 : +1);
+      return;
+    }
     const action = promptArrowAction(
       input.value, input.selectionStart, input.selectionEnd, e.key,
     );
@@ -732,7 +747,7 @@ input.addEventListener("input", updateSuggest);
 input.addEventListener("click", updateSuggest);
 input.addEventListener("keyup", (e) => {
   // Arrow keys don't fire "input" but they do move the cursor — keep popup in sync.
-  if (e.key.startsWith("Arrow")) updateSuggest();
+  if (e.key.startsWith("Arrow") && !suggest.visible) updateSuggest();
 });
 
 function moveCursorEnd() {

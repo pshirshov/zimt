@@ -39,6 +39,19 @@
     return value.slice(0, end).split(/\s+/).filter(Boolean);
   }
 
+  function modelForContext(tokens, appState) {
+    const models = appState?.models ?? [];
+    for (let i = tokens.length - 2; i >= 0; i -= 1) {
+      if (tokens[i] !== "/model") continue;
+      const name = tokens[i + 1];
+      if (!name || name.startsWith("/")) continue;
+      const explicit = models.find((m) => m.name === name);
+      if (explicit) return explicit;
+    }
+    if (!appState?.model) return null;
+    return models.find((m) => m.name === appState.model) ?? null;
+  }
+
   function completionItems(value, tokStart, tokText, appState) {
     const before = tokensBefore(value, tokStart);
     const prev = before.length ? before[before.length - 1] : "";
@@ -52,16 +65,14 @@
     }
 
     if (prev === "/sampler") {
-      if (!appState?.loaded) return [];
-      const model = (appState.models ?? []).find((m) => m.name === appState.model);
+      const model = modelForContext(before, appState);
       return (model?.samplers ?? [])
         .filter((s) => s.toLowerCase().startsWith(lower))
         .map((s) => ({ label: s, desc: "" }));
     }
 
     if (prev === "/res") {
-      if (!appState?.loaded) return [];
-      const model = (appState.models ?? []).find((m) => m.name === appState.model);
+      const model = modelForContext(before, appState);
       const presets = model?.resolutions ?? [];
       const byArea = (a, b) => (b.w * b.h) - (a.w * a.h);
       const square = [...presets].sort(byArea).find((r) => r.w === r.h);

@@ -47,6 +47,16 @@ let
     else if backend == "xpu"  then xpuVariant
     else null;
 
+  withoutPythonPackages = names: packages:
+    builtins.filter (pkg: !(builtins.elem (pkg.pname or (pkg.name or "")) names)) packages;
+
+  accelerateWithoutTorch = pyPkgs.accelerate.overridePythonAttrs (old: {
+    dependencies = withoutPythonPackages [ "torch" ] (old.dependencies or []);
+    propagatedBuildInputs = withoutPythonPackages [ "torch" ] (old.propagatedBuildInputs or []);
+    dontCheckRuntimeDeps = true;
+    pythonImportsCheck = [];
+  });
+
   resolvedTorch       = pickDefault pytorchPackage
                           (pyPkgs.torchWithCuda or pyPkgs.torch)
                           (pyPkgs.torchWithRocm or pyPkgs.torch)
@@ -62,19 +72,19 @@ let
                           pyPkgs.transformers pyPkgs.transformers;
   resolvedAccelerate  = pickDefault acceleratePackage
                           pyPkgs.accelerate pyPkgs.accelerate
-                          pyPkgs.accelerate pyPkgs.accelerate;
+                          pyPkgs.accelerate accelerateWithoutTorch;
 
-  # diffusers needs to be from git main for Z-Image / Pony / Illustrious
-  # support — nixpkgs's pinned diffusers is usually too old.
+  # diffusers needs to be newer than nixpkgs for Z-Image / Pony / Illustrious
+  # support. v0.37.1 keeps safetensors compatible with nixpkgs 0.7.0.
   diffusersFromGit = pyPkgs.buildPythonPackage rec {
     pname = "diffusers";
-    version = "0.39.0.dev0";
+    version = "0.37.1";
     format = "pyproject";
     src = fetchFromGitHub {
       owner = "huggingface";
       repo = "diffusers";
-      rev = "main";
-      hash = lib.fakeHash;          # populate via scripts/seed-wheel-hashes.sh
+      rev = "ad3a3afc3a4d3068bbb12f58129c855087ffc6d6";
+      hash = "sha256-PKVzByWR6VjtD6ZE+/Uc52Xv+As2OzIPJcQK9vj6sXo=";
     };
     nativeBuildInputs = [ pyPkgs.setuptools ];
     propagatedBuildInputs = with pyPkgs; [

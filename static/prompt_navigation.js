@@ -19,8 +19,16 @@
     return "native";
   }
 
+  function popupArrowSelection(selected, count, key) {
+    if (count <= 0) return selected;
+    if (key === "ArrowUp") return (selected - 1 + count) % count;
+    if (key === "ArrowDown") return (selected + 1) % count;
+    return selected;
+  }
+
   root.promptArrowAction = promptArrowAction;
+  root.popupArrowSelection = popupArrowSelection;
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { promptArrowAction };
+    module.exports = { promptArrowAction, popupArrowSelection };
   }
 })(typeof globalThis !== "undefined" ? globalThis : window);

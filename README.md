@@ -1,10 +1,15 @@
 # zimt
 
+Minimalistic and powerful multi-model image-generation REPL + web UI, tuned for Intel Arc GPUs but
+backend-agnostic (XPU / CUDA / ROCm / CPU). 
+
+Graphs? Workflows? Repositories full of shit? You don't need that anymore.
+
+Need a customization? A new model? Ask Claude, it will bake the shit in for you.
+
 <img width="1954" height="1678" alt="image" src="https://github.com/user-attachments/assets/eff91206-9793-4860-9f40-0c58a9f143ad" />
 
-
-Multi-model image-generation REPL + web UI, tuned for Intel Arc GPUs but
-backend-agnostic (XPU / CUDA / ROCm / CPU). Models currently supported:
+Models currently supported:
 
 | name | source | notes |
 |---|---|---|

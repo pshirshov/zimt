@@ -1,0 +1,221 @@
+# zimt
+
+Multi-model image-generation REPL + web UI, tuned for Intel Arc GPUs but
+backend-agnostic (XPU / CUDA / ROCm / CPU). Models currently supported:
+
+| name | source | notes |
+|---|---|---|
+| `z-image-turbo` | `Tongyi-MAI/Z-Image-Turbo` | 6B DiT, Qwen3-4B text encoder, CFG=0 |
+| `pony-v6-xl` | `kitty7779/ponyDiffusionV6XL` (diffusers mirror) | SDXL fine-tune, Euler-a, score-tag prefix, fp16-fix VAE |
+| `illustrious-xl-v1` | `WhiteAiZ/Illustrious-xl-v1.0` (diffusers mirror) | anime-focused SDXL fine-tune |
+
+The codebase is a single Python package (`src/zimt/`) with two entry modes
+sharing the same command parser, so anything you can do in the CLI
+(`/model`, `/cfg`, `/res`, `/many`, `/tokenize`, …) works verbatim in the
+web UI's prompt box too.
+
+## Quick start (dev tree)
+
+`run.sh` is the development entry point. It sets up the Intel XPU bypass
+env and execs the Python entrypoint:
+
+```sh
+./run.sh                       # CLI REPL
+./run.sh --web 127.0.0.1:8000  # web UI on http://127.0.0.1:8000
+./run.sh --help                # full flag list
+```
+
+Useful CLI flags:
+
+* `--out-dir DIR` — where PNGs are saved (default `./out`; falls back to
+  `$XDG_DATA_HOME/zimt/out` when installed from `/nix/store`).
+* `--hf-cache DIR` — `HF_HOME` for the diffusers / transformers cache.
+
+## REPL / web command surface
+
+Multi-command lines compose left-to-right; greedy commands (`/negprompt`,
+`/tokenize`, `/many`) stop at the next `/cmd`:
+
+```
+/model pony-v6-xl /cfg 5 /steps 25 /res 1216x832 cute anime girl
+/many 8 /seed 42 a forest
+/tokenize 西安大雁塔 ⚡️ supercalifragilistic
+```
+
+| command | effect |
+|---|---|
+| `<prompt>` | generate one image with a random seed |
+| `/raw <prompt>` | skip the model's auto-prefix (score-tags etc.) |
+| `/many N <prompt>` | generate N images; seeds increment if `/seed` is also set |
+| `/seed N` | pin seed for the next generation |
+| `/cfg X` / `/steps N` / `/size W H` | numeric settings |
+| `/res N` / `/res WxH` | pick a model-preset resolution or set explicitly |
+| `/negprompt …` / `/negprompt -` | set / clear negative prompt |
+| `/model <name>` | swap the loaded model (no-op if already loaded) |
+| `/tokenize <text>` | per-encoder token analysis + budget headroom |
+| `/help` / `/quit` | help / leave |
+
+Tab-completion works in both modes — `/m<TAB>` cycles `/model`/`/many`,
+`/model <TAB>` cycles registered model names. Up/Down navigates prompt
+history.
+
+## Web UI features
+
+* Two-tab thumbnail browser (`all` / `favs`) with `★` per-thumb favorite
+  toggle and modal preview (full image + every PNG metadata field + per-row
+  copy button + Restore-to-prompt that reproduces the run byte-for-byte).
+* Resizable splitter; thumbnail grid uses `auto-fill` so a new column
+  snaps in as you widen the panel.
+* WebSocket-driven job queue with per-step progress bars (`callback_on_step_end`
+  hook), cancel-one + cancel-all + clear-completed.
+* Three section-header buttons:
+  * `outputs` → `clean` (deletes non-favorite PNGs server-side)
+  * `queue` → `cancel all` + `clear` (drop done/error/canceled jobs)
+  * `recent prompts` → `clear` (localStorage-only)
+* `Cache-Control: no-store` on every static asset so dev iterations land
+  without forced reloads.
+
+## Nix flake
+
+```sh
+nix build .#zimt-xpu          # Intel Arc (default)
+nix build .#zimt-cpu          # CPU fallback
+NIXPKGS_ALLOW_UNFREE=1 \
+nix build .#zimt-cuda --impure
+nix build .#zimt-rocm
+
+nix flake check               # pyright + per-backend eval
+nix develop                   # full dev shell
+```
+
+* CPU / CUDA / ROCm variants pull `torch` / `torchWithCuda` /
+  `torchWithRocm` from **nixpkgs** — nothing vendored.
+* XPU pulls 24 wheels from PyTorch's xpu index + PyPI (`intel-*`, `mkl`,
+  `onemkl-*`, `triton-xpu`, …) since nixpkgs doesn't carry a torch-xpu
+  build.
+
+### Populating the XPU wheel hashes
+
+`nix/wheels-xpu.nix` ships with `lib.fakeHash` placeholders. Two ways to
+fill them in:
+
+```sh
+# 1. If you've already pip-installed the wheels at least once
+#    (./run.sh or an earlier nix build has primed ~/.cache/pip):
+.venv/bin/python scripts/seed-from-pip-cache.py
+
+# 2. Otherwise, fetch each URL with nix-prefetch-url:
+./scripts/seed-wheel-hashes.sh
+```
+
+The pip-cache seeder reads each cached wheel's `dist-info/METADATA` to
+match `(pname, version)` and computes the SRI sha256 in-place — no
+network.
+
+## NixOS module
+
+The flake exposes `nixosModules.default`. Minimal use:
+
+```nix
+{
+  inputs.zimt.url = "github:user/zimt";
+  outputs = { self, nixpkgs, zimt, ... }: {
+    nixosConfigurations.host = nixpkgs.lib.nixosSystem {
+      modules = [
+        zimt.nixosModules.default
+        ({ ... }: {
+          smind.services.zimt = {
+            enable = true;
+            gpuSupport = "xpu";
+            listenAddress = "0.0.0.0";
+            port = 8000;
+            openFirewall = true;
+            hfTokenFile = "/run/secrets/zimt-hf-token";
+          };
+        })
+      ];
+    };
+  };
+}
+```
+
+Options:
+
+| option | type | default | notes |
+|---|---|---|---|
+| `enable` | bool | false | |
+| `gpuSupport` | enum | `cpu` | `xpu` / `cuda` / `rocm` / `cpu` |
+| `package` | derivation | auto from `gpuSupport` | override to pass a custom Python env |
+| `listenAddress` | str | `127.0.0.1` | |
+| `port` | port | `8000` | |
+| `openFirewall` | bool | false | |
+| `outDir` | path | `/var/lib/zimt/out` | |
+| `hfCacheDir` | path | `/var/lib/zimt/hf_cache` | maps to `HF_HOME` |
+| `hfTokenFile` | nullable path | `null` | loaded via systemd `LoadCredential`; never appears in the unit's static env |
+| `user` / `group` | str | `zimt` / `zimt` | system user with `render` / `video` groups for `/dev/dri/*` |
+| `extraEnvironment` | attrs of str | `{}` | merged on top of zimt-managed env |
+
+When `gpuSupport = "xpu"` and the host already has
+`smind.hw.intel.gpu.xpu.openclBackend.enable = true`, the bypass triplet
+(`LD_PRELOAD` + `ONEAPI_DEVICE_SELECTOR` + `OCL_ICD_VENDORS`) is auto-merged
+into the unit. Without it, NEO's L0 driver init aborts on the first
+`GEM_USERPTR` allocation (intel/compute-runtime#922).
+
+## Repository layout
+
+```
+zimt/
+├── flake.nix
+├── pyproject.toml          # pyright in basic mode, venv-aware, 0/0/0
+├── run.sh                  # dev entry: sets XPU env + execs `python -m zimt`
+├── nix/
+│   ├── package.nix         # backend-aware build, accepts overrides
+│   ├── module.nix          # NixOS module
+│   └── wheels-{xpu,cuda,rocm,cpu}.nix
+├── scripts/
+│   ├── seed-from-pip-cache.py    # no-network hash seeder
+│   └── seed-wheel-hashes.sh      # network fallback via nix-prefetch-url
+├── src/zimt/
+│   ├── __main__.py / cli.py      # argparse, env-var pre-pass
+│   ├── paths.py                  # OUT_DIR / HF_HOME / Nix-store fallback
+│   ├── device.py                 # auto-detect cuda / xpu / mps / cpu
+│   ├── buckets.py                # SDXL_BUCKETS + ZIMAGE_BUCKETS + /res parser
+│   ├── tokenize_report.py        # per-encoder analysis
+│   ├── generate.py               # GenConfig, generate(), CancelledByUser
+│   ├── preview.py                # kitty / iTerm inline + tmux passthrough
+│   ├── models/
+│   │   ├── spec.py               # ModelSpec dataclass
+│   │   ├── sdxl_common.py        # shared SDXL two-encoder tokenize
+│   │   ├── {zimage,pony,illustrious}.py
+│   │   └── registry.py           # MODELS = { … }
+│   ├── repl/
+│   │   ├── commands.py           # parse_commands + COMMAND_ARITY
+│   │   ├── history.py            # readline + Tab completion
+│   │   └── main.py               # repl_main()
+│   └── webui/
+│       ├── app.py                # FastAPI routes + run_web()
+│       ├── state.py              # AppState, Job, locks
+│       ├── ws.py                 # broadcast helpers
+│       ├── loader.py             # async model swap
+│       ├── jobs.py               # run_job() worker + cancel/progress
+│       ├── outputs.py            # listing + favorite + cleanup
+│       └── exec_api.py           # /api/exec multi-command executor
+└── static/                       # vanilla HTML / CSS / JS, no build step
+```
+
+## Troubleshooting
+
+* **Pony or Illustrious output looks pastel / washed-out** — fixed (the
+  bundled SDXL VAE has the SD 1.x `scaling_factor` 0.18215 and isn't
+  fp16-stable). `models/pony.py` and `models/illustrious.py` substitute
+  `madebyollin/sdxl-vae-fp16-fix` automatically.
+* **First Battlemage generation hangs / crashes** — your XPU bypass isn't
+  active. On the host, enable `smind.hw.intel.gpu.xpu.openclBackend.enable`.
+  Manually, set the three env vars (`LD_PRELOAD`, `ONEAPI_DEVICE_SELECTOR`,
+  `OCL_ICD_VENDORS`) from `run.sh`.
+* **`nix flake check` fails on `zimt-cuda`** — expected without
+  `NIXPKGS_ALLOW_UNFREE=1`; `cuda_nvcc` is unfree.
+* **Inline preview doesn't appear in tmux** — add
+  `set -g allow-passthrough on` to `~/.tmux.conf` and reattach.
+* **HF rate-limit / token errors** — set `HF_TOKEN` (or `--hf-cache` to a
+  pre-populated cache).

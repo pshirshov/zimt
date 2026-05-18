@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# zimt artifacts
+out/
+hf_cache/
+.prompt_history
+
+# debug scripts (per CLAUDE.md convention)
+debug/
+
+# docs drafts
+docs/drafts/
+
+# editor / OS junk
+.DS_Store
+*.swp
+.vscode/
+.idea/

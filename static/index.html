@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>zimt</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <div class="left">
+    <div class="topbar">
+      <h1>zimt</h1>
+      <span id="ws-state" class="pill">disconnected</span>
+      <span id="model-state" class="pill">no model</span>
+    </div>
+
+    <div class="prompt-bar">
+      <div class="prompt-row">
+        <textarea id="prompt-input" rows="1" autocomplete="off" autocapitalize="off"
+                  spellcheck="false" autofocus
+                  placeholder="type a prompt, or /command (Tab to complete, ↑/↓ history, Shift+Enter for newline) — e.g. /model pony-v6-xl /steps 25 cute anime girl"></textarea>
+        <button id="btn-generate" class="gen-btn" title="generate (Enter)">gen</button>
+      </div>
+      <div class="log-row">
+        <div id="log"></div>
+        <button id="btn-clear-log" class="section-btn"
+                title="clear command output">clear</button>
+      </div>
+    </div>
+
+    <div class="left-content">
+      <div class="section">
+        <h2><span>state</span></h2>
+        <pre id="state-text" class="state empty">no model loaded</pre>
+      </div>
+      <div class="section">
+        <h2>
+          <span>queue</span>
+          <span class="section-actions">
+            <button id="btn-cancel-all" class="section-btn"
+                    title="cancel every queued or running job">cancel all</button>
+            <button id="btn-clear-completed" class="section-btn"
+                    title="remove done / error / canceled jobs from the queue">clear</button>
+          </span>
+        </h2>
+        <ul class="queue-list" id="queue-list"></ul>
+      </div>
+      <div class="section">
+        <h2>
+          <span>recent prompts</span>
+          <button id="btn-clear-recent" class="section-btn"
+                  title="clear recent prompts (localStorage only)">clear</button>
+        </h2>
+        <ul class="recent-list" id="recent-list"></ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="splitter" id="splitter"></div>
+
+  <div class="right" id="right-pane">
+    <div class="right-header">
+      <h2 class="right-title">
+        <span>outputs <span id="outputs-count" class="pill">0</span></span>
+        <button id="btn-cleanup-outputs" class="section-btn"
+                title="delete every non-favorite output">clean</button>
+      </h2>
+      <div class="tabs">
+        <button class="tab active" data-tab="all">all</button>
+        <button class="tab" data-tab="favs">favs</button>
+      </div>
+    </div>
+    <div class="right-content">
+      <div class="thumbs" id="thumbs"></div>
+      <button class="load-more" id="load-more" style="display:none;">Load more</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal small" id="error-popup">
+  <div class="modal-inner">
+    <div class="modal-side" style="flex: 1 1 auto;">
+      <h3 style="margin: 0 0 8px;">job error</h3>
+      <pre id="error-popup-text"
+           style="background: #25252b; padding: 10px; border-radius: 4px;
+                  white-space: pre-wrap; word-break: break-word; max-height: 60vh;
+                  overflow-y: auto; font: 12px ui-monospace, monospace;"></pre>
+      <div class="modal-actions">
+        <button id="error-popup-copy">copy</button>
+        <button id="error-popup-close" style="margin-left: auto;">✕ close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="modal-inner">
+    <div class="modal-img-wrap">
+      <img id="modal-img" alt="">
+    </div>
+    <div class="modal-side">
+      <div class="modal-actions">
+        <button id="modal-restore">Restore to prompt</button>
+        <button id="modal-fav">★ favorite</button>
+        <button id="modal-close">✕ close</button>
+      </div>
+      <div class="meta-grid" id="modal-meta"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

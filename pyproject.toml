@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zimt"
+version = "0.1.0"
+description = "Multi-model image-generation REPL + web UI for Intel Arc / NVIDIA / AMD GPUs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  # torch, torchvision are backend-specific (xpu / cuda / rocm / cpu) and
+  # pinned at the deployment layer (the Nix flake, or your venv).
+  "diffusers",
+  "transformers",
+  "accelerate",
+  "huggingface_hub",
+  "Pillow",
+  "safetensors",
+  "fastapi",
+  "uvicorn",
+]
+
+[project.scripts]
+zimt = "zimt.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["zimt*"]
+
+[tool.setuptools.package-data]
+zimt = []
+
+[tool.pyright]
+include = ["src"]
+exclude = [".venv", "**/__pycache__"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+useLibraryCodeForTypes = true
+reportMissingImports = "warning"      # diffusers/transformers types are loose
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownVariableType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownParameterType = "none"
+# diffusers/torch have many public symbols missing from their __init__.py
+# `__all__` lists — pyright flags every import. These aren't bugs in our
+# code, so the diagnostic is off-noise here.
+reportPrivateImportUsage = "none"

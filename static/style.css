@@ -1,0 +1,171 @@
+  :root {
+    --bg: #1a1a1f; --fg: #e7e7ec; --muted: #999;
+    --panel: #23232a; --border: #383843; --accent: #6c8eff;
+    --error: #ff7a7a; --ok: #5fbf5f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font: 14px/1.45 system-ui, sans-serif;
+    background: var(--bg); color: var(--fg); }
+  input, button, select, textarea {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 8px; font: inherit;
+  }
+  button { cursor: pointer; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px;
+    background: #2e2e38; color: var(--muted); font-size: 11px; margin-right: 4px; }
+  .pill.ok { color: var(--ok); }
+  .pill.err { color: var(--error); }
+
+  /* Top-level horizontal split: left column (everything) + splitter + right pane.
+     Both columns are full-height; only their inner content areas scroll. */
+  .layout { display: flex; height: 100vh; min-height: 0; }
+  .left { flex: 1 1 auto; min-width: 240px; display: flex; flex-direction: column;
+    min-height: 0; }
+  .splitter { flex: 0 0 6px; background: var(--border); cursor: col-resize; }
+  .splitter:hover { background: var(--accent); }
+  .right { flex: 0 0 auto; width: 380px; background: var(--panel);
+    border-left: 1px solid var(--border); display: flex; flex-direction: column;
+    min-height: 0; }
+
+  .topbar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .topbar h1 { font-size: 14px; margin: 0; color: var(--muted); font-weight: 500; }
+  .prompt-bar { flex: 0 0 auto; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  /* Small action button hosted inside a section header (h2). It overrides
+     the h2's uppercase styling so it reads as a button, not a label. */
+  .section-btn, .right-title .section-btn {
+    font: 11px ui-monospace, monospace; padding: 2px 8px;
+    color: var(--muted); background: transparent;
+    border: 1px solid var(--border); border-radius: 3px;
+    text-transform: none; letter-spacing: 0;
+  }
+  .section-btn:hover { color: var(--fg); border-color: var(--accent); }
+  .section-actions { display: flex; gap: 4px; }
+  /* Command-output panel under the prompt: log entries on the left, a small
+     `clear` button on the right. The button hides when the log is empty so
+     it doesn't draw the eye unnecessarily. */
+  .log-row { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
+  .log-row > #log { flex: 1 1 auto; min-width: 0; }
+  .log-row > #btn-clear-log { flex: 0 0 auto; opacity: 0.55; align-self: flex-start; }
+  .log-row > #btn-clear-log:hover { opacity: 1; }
+  .log-row > #log:empty + #btn-clear-log { display: none; }
+  /* Textarea + gen button side-by-side. Button stretches to match the
+     textarea's auto-grown height. */
+  .prompt-row { display: flex; gap: 8px; align-items: stretch; }
+  .prompt-row > textarea { flex: 1 1 auto; }
+  .gen-btn { flex: 0 0 auto; padding: 0 18px; font-weight: 600;
+    background: var(--accent); color: #fff; border-color: transparent; }
+  .gen-btn:hover { filter: brightness(1.1); }
+  .gen-btn:active { filter: brightness(0.95); }
+
+  .prompt-bar textarea {
+    width: 100%; padding: 10px 12px;
+    font-family: ui-monospace, monospace; line-height: 1.4;
+    resize: none;                /* JS-driven auto-resize, no user grip */
+    overflow-y: auto;            /* show scrollbar once max-height is hit */
+    min-height: 2.5em; max-height: 16em;
+    white-space: pre-wrap;
+  }
+  .left-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }
+
+  /* Right pane: header stays put, only thumbnails scroll. */
+  .right-header { flex: 0 0 auto; padding: 12px; border-bottom: 1px solid var(--border);
+    background: var(--panel); }
+  .right-title { font-size: 12px; color: var(--muted); margin: 0 0 6px;
+    text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500;
+    display: flex; align-items: center; justify-content: space-between; }
+  .right-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px; }
+
+  .section { margin-bottom: 22px; }
+  .section h2 { font-size: 12px; color: var(--muted); margin: 0 0 6px;
+    font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em;
+    /* host left-side label + right-aligned action button */
+    display: flex; align-items: center; justify-content: space-between; }
+  pre.state { margin: 0; padding: 10px 12px; background: #25252b; border-radius: 4px;
+    font: 12px/1.5 ui-monospace, monospace; color: var(--fg); white-space: pre-wrap; }
+  pre.state.empty { color: var(--muted); font-style: italic; }
+  .queue-list, .recent-list { list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 3px; }
+  .queue-item { padding: 5px 8px; border-radius: 3px; background: #25252b;
+    display: flex; gap: 8px; align-items: center; font: 12px ui-monospace, monospace; }
+  .queue-item.status-running { background: #2a3050; }
+  .queue-item.status-done    { background: #25252b; opacity: 0.85; }
+  .queue-item.status-error   { background: #3a2a2a; }
+  .queue-item .qstatus { flex: 0 0 60px; color: var(--muted); }
+  .queue-item .qprompt { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .queue-item .qseed   { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+  .queue-item .qprogress { flex: 0 0 60px; height: 5px; background: #1a1a1f;
+    border-radius: 2px; overflow: hidden; }
+  .queue-item .qprogress > div { height: 100%; background: var(--accent);
+    transition: width 120ms linear; }
+  .queue-item .details-btn { flex: 0 0 auto; background: transparent;
+    border: 1px solid var(--border); color: var(--error); font-size: 11px;
+    padding: 1px 6px; border-radius: 3px; line-height: 1; }
+  .queue-item .details-btn:hover { background: #3a2a2a; border-color: var(--error); }
+
+  /* Compact error-popup variant of the image modal: no large image area,
+     a narrow centered card with the error text and an actions row. */
+  .modal.small .modal-inner { max-width: 640px; padding: 16px; }
+  .modal.small .modal-img-wrap { display: none; }
+  .queue-item .cancel-btn { flex: 0 0 auto; background: transparent;
+    border: 1px solid var(--border); color: var(--muted); font-size: 11px;
+    padding: 1px 6px; border-radius: 3px; line-height: 1; }
+  .queue-item .cancel-btn:hover { color: var(--error); border-color: var(--error); }
+  .queue-item .cancel-btn:disabled { opacity: 0.4; cursor: wait; }
+  .queue-item.status-canceled { background: #2e2630; opacity: 0.75; }
+  .recent-item { padding: 4px 8px; border-radius: 3px; cursor: pointer;
+    font: 12px ui-monospace, monospace; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .recent-item:hover { background: #2e2e38; }
+
+  .log-line { padding: 4px 8px; background: #25252b; border-radius: 3px;
+    margin-top: 4px; font: 12px ui-monospace, monospace; color: var(--muted);
+    white-space: pre-wrap; }
+  .log-line.error { color: var(--error); background: #3a2a2a; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .tab { padding: 4px 12px; border: 1px solid var(--border); background: var(--panel);
+    border-radius: 4px; color: var(--muted); }
+  .tab.active { background: var(--accent); color: #fff; border-color: transparent; }
+  /* Fit as many columns of at least 150 px as the pane allows; each cell
+     stretches up to 1fr of the leftover space. Effect: small resize grows
+     the current thumbs; cross the 150 px+gap threshold and a new column
+     materialises. */
+  .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 6px; }
+  .thumb { aspect-ratio: 1; background: #111; cursor: pointer;
+    border-radius: 3px; overflow: hidden; position: relative; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .star-btn { position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.55);
+    border: none; color: #fff; font-size: 14px; line-height: 1;
+    border-radius: 50%; width: 22px; height: 22px; padding: 0; }
+  .star-btn.on { color: #ffcc44; }
+  .load-more { width: 100%; margin-top: 10px; padding: 8px; }
+
+  /* modal */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.88);
+    display: none; padding: 20px; overflow-y: auto; z-index: 100; }
+  .modal.open { display: block; }
+  .modal-inner { max-width: 1500px; margin: 0 auto; background: var(--bg);
+    border-radius: 6px; padding: 16px; display: flex; gap: 16px; }
+  .modal-img-wrap { flex: 1 1 60%; min-width: 0; display: flex;
+    flex-direction: column; align-items: center; gap: 10px; }
+  .modal-img-wrap img { max-width: 100%; max-height: 86vh; object-fit: contain;
+    background: #000; border-radius: 4px; }
+  .modal-side { flex: 0 0 380px; display: flex; flex-direction: column; gap: 10px; }
+  .modal-actions { display: flex; gap: 6px; }
+  .modal-actions button { padding: 6px 10px; }
+  /* #modal-close sits in .modal-actions alongside Restore / favorite, but
+     pushed to the right via auto-margin so it visually separates from the
+     two action buttons on the left. */
+  #modal-close { margin-left: auto; }
+  #modal-close:hover { background: #3a2a2a; border-color: var(--error); color: var(--error); }
+  .meta-grid { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px;
+    align-items: start; font: 12px ui-monospace, monospace; }
+  .meta-key { color: var(--muted); }
+  .meta-val { white-space: pre-wrap; word-break: break-word; max-height: 8em; overflow-y: auto; }
+  .copy-btn { background: var(--panel); padding: 2px 8px; font-size: 11px; border-radius: 3px; }
+  @media (max-width: 900px) {
+    .modal-inner { flex-direction: column; }
+    .modal-side { flex: 0 0 auto; }
+  }

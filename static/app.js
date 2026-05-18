@@ -755,16 +755,36 @@ input.addEventListener("keydown", (e) => {
     hideSuggest();
     return;
   }
+  // Shift+Enter: submit but DON'T clear the textarea (iterate-friendly).
+  // Dismisses the popup as a side effect. Takes precedence over the
+  // other Enter handlers regardless of popup state.
+  if (e.key === "Enter" && e.shiftKey && !e.ctrlKey) {
+    e.preventDefault();
+    hideSuggest();
+    submit({ keepValue: true });
+    return;
+  }
+  // Ctrl+Enter: insert a newline (since Shift+Enter no longer does that).
+  if (e.key === "Enter" && e.ctrlKey) {
+    // Let the textarea handle Enter normally — but Ctrl+Enter doesn't
+    // insert a newline by default either, so do it ourselves.
+    e.preventDefault();
+    const c = input.selectionStart;
+    input.value = input.value.slice(0, c) + "\n" + input.value.slice(c);
+    input.setSelectionRange(c + 1, c + 1);
+    autoResize();
+    return;
+  }
   // Enter while popup is open: accept the highlighted item (+ trailing space
   // for /commands that take args) and dismiss the popup. The next Enter
   // submits, unless the popup re-opened for the next-arg context.
-  if (e.key === "Enter" && !e.shiftKey && suggest.visible) {
+  if (e.key === "Enter" && suggest.visible) {
     e.preventDefault();
     commitSuggest();
     return;
   }
-  // Enter (popup closed): submit. Shift+Enter inserts a newline.
-  if (e.key === "Enter" && !e.shiftKey) {
+  // Enter (popup closed): submit + clear.
+  if (e.key === "Enter") {
     e.preventDefault();
     submit();
     return;
@@ -818,20 +838,22 @@ function moveCursorEnd() {
   const n = input.value.length; input.setSelectionRange(n, n);
 }
 
-async function submit() {
+async function submit({ keepValue = false } = {}) {
   const line = input.value.trim();
   if (!line) return;
   // Record everything except bare commands in the recent list.
   if (!line.startsWith("/") || line.includes(" ")) pushRecent(line);
   // optimistic clear feels nicer; restore on error
   const saved = input.value;
-  input.value = ""; historyIdx = -1;
-  hideSuggest();
-  autoResize();
+  if (!keepValue) {
+    input.value = ""; historyIdx = -1;
+    hideSuggest();
+    autoResize();
+  }
   try { await apiPost("/api/exec", { line }); }
   catch (e) {
     appendLog(`exec: ${e.message}`, "error");
-    input.value = saved; autoResize();
+    if (!keepValue) { input.value = saved; autoResize(); }
   }
 }
 

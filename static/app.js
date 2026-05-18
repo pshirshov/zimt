@@ -1,11 +1,5 @@
 const $ = (id) => document.getElementById(id);
 
-// ---------- constants ----------
-const COMMANDS = [
-  "/help","/?","/raw","/many","/seed","/negprompt","/cfg","/steps","/size",
-  "/res","/model","/tokenize","/quit","/exit","/q",
-].sort();
-
 // ---------- state ----------
 let state = null;
 let outputs = [];
@@ -222,6 +216,15 @@ function renderThumbs() {
     reload.title = "restore prompt + settings from this image";
     reload.onclick = (ev) => { ev.stopPropagation(); restoreToPrompt(e); };
     d.appendChild(reload);
+    const reloadFreshSeed = document.createElement("button");
+    reloadFreshSeed.className = "reload-btn reload-no-seed-btn";
+    reloadFreshSeed.textContent = "↺";
+    reloadFreshSeed.title = "restore prompt + settings, but use a new random seed";
+    reloadFreshSeed.onclick = (ev) => {
+      ev.stopPropagation();
+      restoreToPrompt(e, { includeSeed: false });
+    };
+    d.appendChild(reloadFreshSeed);
     // Top-right: favorite toggle.
     const star = document.createElement("button");
     star.className = "star-btn" + (e.fav ? " on" : "");
@@ -348,28 +351,12 @@ $("modal-close").onclick = () => $("modal").classList.remove("open");
 $("modal").onclick = (e) => { if (e.target === $("modal")) $("modal").classList.remove("open"); };
 $("modal-fav").onclick = () => { if (modalEntry) toggleFavorite(modalEntry); };
 
-// Build a single /api/exec line that recreates a previous run, and load it
-// into the prompt textarea. Shared between the modal's Restore button and
-// the per-thumbnail ↻ reload button.
-function restoreToPrompt(entry) {
+// Build a single /api/exec line from previous-run metadata, and load it into
+// the prompt textarea. Shared by the modal restore button and thumbnail reload
+// buttons.
+function restoreToPrompt(entry, options = {}) {
   if (!entry) return;
-  const meta = entry.metadata || {};
-  const parts = [];
-  if (meta.model) parts.push(`/model ${meta.model}`);
-  if (meta.cfg)   parts.push(`/cfg ${meta.cfg}`);
-  if (meta.steps) parts.push(`/steps ${meta.steps}`);
-  if (meta.sampler) parts.push(`/sampler ${meta.sampler}`);
-  if (meta.clip_skip && Number(meta.clip_skip) > 0) parts.push(`/clip_skip ${meta.clip_skip}`);
-  if (meta.width && meta.height) parts.push(`/size ${meta.width} ${meta.height}`);
-  if (meta.negative_prompt != null) parts.push(`/negprompt ${meta.negative_prompt}`);
-  if (meta.seed)  parts.push(`/seed ${meta.seed}`);
-  // Use the FULL composed prompt (`meta.prompt`) plus `/raw` to avoid
-  // re-applying the model's auto-prefix. `raw_prompt` is what the user
-  // typed; replaying it under /raw would silently drop the score-tags
-  // and yield a different image for the same seed.
-  const text = meta.prompt ?? meta.raw_prompt ?? "";
-  if (text) parts.push("/raw", text);
-  $("prompt-input").value = parts.join(" ");
+  $("prompt-input").value = buildRestorePromptLine(entry.metadata || {}, options);
   autoResize();
   $("modal").classList.remove("open");
   $("prompt-input").focus();
@@ -380,84 +367,6 @@ $("modal-restore").onclick = () => restoreToPrompt(modalEntry);
 const input = $("prompt-input");
 let historyIdx = -1;          // -1 = editing fresh; otherwise index into LS.history()
 let editingDraft = "";        // saved when entering history mode
-
-function tokenAtCursor(value, cursor) {
-  // bounded by whitespace
-  let s = cursor; while (s > 0 && !/\s/.test(value[s - 1])) s--;
-  let e = cursor; while (e < value.length && !/\s/.test(value[e])) e++;
-  return { start: s, end: e, text: value.slice(s, e) };
-}
-
-function tokensBefore(value, end) {
-  return value.slice(0, end).split(/\s+/).filter(Boolean);
-}
-
-// Short one-line help shown next to /commands in the suggest popup.
-const COMMAND_HELP = {
-  "/help": "show command list",
-  "/?": "show command list",
-  "/quit": "exit (REPL only)",
-  "/exit": "exit (REPL only)",
-  "/q": "exit (REPL only)",
-  "/raw": "skip the model's auto-prefix",
-  "/many": "generate N images with sequential seeds",
-  "/seed": "pin seed for next gen",
-  "/cfg": "guidance scale",
-  "/steps": "num inference steps",
-  "/size": "set W H (free-form)",
-  "/res": "pick a model-preset resolution",
-  "/sampler": "switch scheduler",
-  "/clip_skip": "SDXL only — skip top N CLIP layers",
-  "/model": "load a model",
-  "/tokenize": "per-encoder token analysis",
-  "/negprompt": "set/clear negative prompt",
-};
-
-function completionItems(value, tokStart, tokText) {
-  // Returns a list of {label, desc} suggestions for the token at the cursor,
-  // filtered by what the user has typed so far.
-  const before = tokensBefore(value, tokStart);
-  const prev = before.length ? before[before.length - 1] : "";
-  const lower = tokText.toLowerCase();
-
-  if (prev === "/model") {
-    const models = state?.models ?? [];
-    return models
-      .filter(m => m.name.toLowerCase().startsWith(lower))
-      .map(m => ({ label: m.name, desc: m.description }));
-  }
-  if (prev === "/sampler") {
-    if (!state?.loaded) return [];
-    const model = (state.models ?? []).find(m => m.name === state.model);
-    return (model?.samplers ?? [])
-      .filter(s => s.toLowerCase().startsWith(lower))
-      .map(s => ({ label: s, desc: "" }));
-  }
-  if (prev === "/res") {
-    if (!state?.loaded) return [];
-    const model = (state.models ?? []).find(m => m.name === state.model);
-    const presets = model?.resolutions ?? [];
-    // Orientation keywords: largest preset by area in each category.
-    const byArea = (a, b) => (b.w * b.h) - (a.w * a.h);
-    const sq = [...presets].sort(byArea).find(r => r.w === r.h);
-    const ls = [...presets].sort(byArea).find(r => r.w > r.h);
-    const pt = [...presets].sort(byArea).find(r => r.w < r.h);
-    const orientations = [
-      sq && { label: "square",    desc: `largest 1:1 (${sq.w}x${sq.h})` },
-      ls && { label: "landscape", desc: `largest W>H (${ls.w}x${ls.h})` },
-      pt && { label: "portrait",  desc: `largest W<H (${pt.w}x${pt.h})` },
-    ].filter(Boolean);
-    const explicit = presets.map(r => ({ label: `${r.w}x${r.h}`, desc: r.label }));
-    return [...orientations, ...explicit]
-      .filter(it => it.label.toLowerCase().startsWith(lower));
-  }
-  if (tokText.startsWith("/")) {
-    return COMMANDS
-      .filter(c => c.toLowerCase().startsWith(lower))
-      .map(c => ({ label: c, desc: COMMAND_HELP[c] ?? "" }));
-  }
-  return [];
-}
 
 // Auto-grow the textarea wrap (which sizes the absolute-positioned overlay)
 // to fit the content. Also re-renders the syntax-highlighted mirror.
@@ -638,7 +547,7 @@ function updateSuggest() {
   const value = input.value;
   const cursor = input.selectionStart;
   const tok = tokenAtCursor(value, cursor);
-  const items = completionItems(value, tok.start, tok.text);
+  const items = completionItems(value, tok.start, tok.text, state);
   if (!items.length) {
     suggest = { visible: false, items: [], selected: 0,
                 tokenStart: 0, tokenEnd: 0, tokenText: "", cycling: false };

@@ -769,9 +769,20 @@ input.addEventListener("keydown", (e) => {
     submit();
     return;
   }
-  // Arrows always do history navigation when on the edge line of the
-  // textarea — they NEVER navigate the popup. (Popup is Tab-driven so the
-  // muscle memory for readline-style up/down history stays intact.)
+  // Arrows: navigate the popup when it's open (same behaviour as
+  // Tab/Shift-Tab — preview cycle, no trailing space, no commit). When
+  // the popup is closed, arrows fall through to history navigation on
+  // the textarea's edge lines.
+  if (e.key === "ArrowDown" && suggest.visible) {
+    e.preventDefault();
+    cycleSuggest(+1);
+    return;
+  }
+  if (e.key === "ArrowUp" && suggest.visible) {
+    e.preventDefault();
+    cycleSuggest(-1);
+    return;
+  }
   if (e.key === "ArrowUp" && cursorOnFirstLine()) {
     const h = LS.history();
     if (!h.length) return;

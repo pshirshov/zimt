@@ -669,9 +669,16 @@ function hideSuggest() {
   popup.setAttribute("aria-hidden", "true");
 }
 
+// /commands that DON'T need a trailing space when accepted (zero arity, or
+// /raw which is itself a flag that precedes the prompt text).
+const NO_TRAILING_SPACE_CMDS = new Set([
+  "/help", "/?", "/quit", "/exit", "/q", "/raw",
+]);
+
 // Tab/Shift-Tab driver: advance selection, rewrite the token in the textarea.
 // First Tab "accepts" the already-highlighted top match (selected stays at 0
-// the very first time, advances on each subsequent Tab).
+// the very first time, advances on each subsequent Tab). No trailing space —
+// this is preview-style cycling; commit happens via Enter or click.
 function cycleSuggest(direction) {
   if (!suggest.visible || !suggest.items.length) return false;
   const len = suggest.items.length;
@@ -694,15 +701,39 @@ function cycleSuggest(direction) {
   return true;
 }
 
-// Click on an item: jump to it (regardless of cycling state) and dismiss.
+// "Commit" — used by Enter and click. Inserts the highlighted item AND a
+// trailing space for /commands that take arguments, then dismisses the
+// popup. For /cmd accepts the popup re-opens immediately at the new
+// cursor position so the user can chain through model/sampler/preset
+// without retyping anything.
+function commitSuggest() {
+  if (!suggest.visible || !suggest.items.length) return false;
+  suggest.cycling = true;
+  const choice = suggest.items[suggest.selected].label;
+  const isCmdWithArgs = choice.startsWith("/") && !NO_TRAILING_SPACE_CMDS.has(choice);
+  const inject = choice + (isCmdWithArgs ? " " : "");
+  const before = input.value.slice(0, suggest.tokenStart);
+  const after  = input.value.slice(suggest.tokenEnd);
+  input.value = before + inject + after;
+  const newCursor = suggest.tokenStart + inject.length;
+  input.setSelectionRange(newCursor, newCursor);
+  suggest.tokenEnd = newCursor;
+  autoResize();
+  hideSuggest();
+  // After a /cmd commit, immediately surface the next-arg suggestions so
+  // /model<Enter> flows straight into picking the model name.
+  if (isCmdWithArgs) updateSuggest();
+  return true;
+}
+
+// Click on an item: select it, then commit (with trailing space + popup
+// re-opens for the next context, just like Enter).
 popup.addEventListener("mousedown", (e) => {
   const target = e.target.closest(".suggest-item");
   if (!target) return;
   e.preventDefault();  // keep focus in the textarea
   suggest.selected = Number(target.dataset.i) || 0;
-  suggest.cycling = true;  // already-selected means a replacement happens
-  cycleSuggest(0);
-  hideSuggest();
+  commitSuggest();
 });
 
 input.addEventListener("blur", () => {
@@ -724,13 +755,12 @@ input.addEventListener("keydown", (e) => {
     hideSuggest();
     return;
   }
-  // Enter while popup is open: accept the highlighted item + dismiss popup.
-  // (User can press Enter again on the next line to actually submit.)
+  // Enter while popup is open: accept the highlighted item (+ trailing space
+  // for /commands that take args) and dismiss the popup. The next Enter
+  // submits, unless the popup re-opened for the next-arg context.
   if (e.key === "Enter" && !e.shiftKey && suggest.visible) {
     e.preventDefault();
-    suggest.cycling = true;  // ensure cycleSuggest(0) writes the selection
-    cycleSuggest(0);
-    hideSuggest();
+    commitSuggest();
     return;
   }
   // Enter (popup closed): submit. Shift+Enter inserts a newline.

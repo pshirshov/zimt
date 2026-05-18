@@ -151,6 +151,9 @@ def repl_main() -> int:
             elif cmd == "/many":
                 try:
                     n = int(args[0])
+                    # Only override prompt_text if /many has its own greedy
+                    # prompt arg (non-empty). Otherwise we'd erase a prompt
+                    # the user typed before /many on the same line.
                     if len(args) > 1 and args[1]:
                         prompt_text = args[1]
                     if 1 <= n <= 256:

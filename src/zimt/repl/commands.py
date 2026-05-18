@@ -38,26 +38,26 @@ COMMANDS: list[str] = sorted(COMMAND_ARITY)
 def parse_commands(line: str) -> list[tuple[str, list[str]]]:
     """Tokenize a line into ``[(command, args)]``.
 
-    The synthetic command name ``/_prompt`` is used for free-form text
-    (the trailing prompt). All other names match :data:`COMMAND_ARITY`.
+    ``/cmd`` tokens may appear *anywhere* on the line — before the prompt,
+    after it, or interleaved. Every non-command token that isn't consumed
+    by a command's args is collected into a single trailing
+    ``("/_prompt", [text])`` entry. This way users can write
+    ``a cute girl /many 3`` and have ``/many 3`` interpreted as a command
+    rather than swallowed into the prompt.
+
+    Greedy commands (``GREEDY`` / ``MANY``) still stop at the next known
+    ``/cmd`` boundary.
     """
     tokens = line.split()
     out: list[tuple[str, list[str]]] = []
-
-    # Leading text before the first /cmd token is treated as a prompt.
-    first_cmd = next((j for j, t in enumerate(tokens) if t in KNOWN_COMMANDS), None)
-    if first_cmd is None:
-        text = " ".join(tokens)
-        return [("/_prompt", [text])] if text else []
-    if first_cmd > 0:
-        out.append(("/_prompt", [" ".join(tokens[:first_cmd])]))
-
-    i = first_cmd
+    prompt_acc: list[str] = []
+    i = 0
     while i < len(tokens):
         tok = tokens[i]
         if tok not in KNOWN_COMMANDS:
-            out.append(("/_prompt", [" ".join(tokens[i:])]))
-            break
+            prompt_acc.append(tok)
+            i += 1
+            continue
         arity = COMMAND_ARITY[tok]
 
         if arity == 0:
@@ -86,4 +86,6 @@ def parse_commands(line: str) -> list[tuple[str, list[str]]]:
             out.append((tok, args))
             i += 1 + arity
 
+    if prompt_acc:
+        out.append(("/_prompt", [" ".join(prompt_acc)]))
     return out

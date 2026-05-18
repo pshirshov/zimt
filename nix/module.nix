@@ -195,6 +195,16 @@ in
         Restart = "on-failure";
         RestartSec = "5s";
 
+        # On stop, systemd sends SIGTERM. uvicorn's signal handler triggers
+        # graceful shutdown, which fires our @app.on_event("shutdown") that
+        # cancels in-flight generations (the pipeline callback aborts at
+        # the next step, ~1-3s) and drains the executor. 60s is well above
+        # the worst-case path: scheduler-step latency × max steps_setting
+        # we ever ship. systemd's default 90s would also work but we make
+        # the budget explicit.
+        KillSignal = "SIGTERM";
+        TimeoutStopSec = "60s";
+
         # Hardening — kept compatible with GPU device access (which needs
         # ``/dev/dri/*``, hence ``DeviceAllow = "char-drm rw"`` rather than
         # ``PrivateDevices = true``).

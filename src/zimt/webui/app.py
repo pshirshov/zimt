@@ -19,7 +19,7 @@ from ..paths import FAV_DIR, OUT_DIR, STATIC_DIR, ensure_dirs
 from .exec_api import ExecBody, api_exec as exec_handler
 from .loader import load_model
 from .outputs import list_outputs, read_png_meta, resolve_output, safe_name
-from .state import CANCEL_EVENTS, STATE
+from .state import CANCEL_EVENTS, EXECUTOR, STATE
 from .ws import broadcast, emit_job
 
 app = FastAPI()
@@ -63,6 +63,27 @@ async def _gpu_stats_loop() -> None:
 async def _start_gpu_stats() -> None:
     import asyncio
     asyncio.create_task(_gpu_stats_loop())
+
+
+@app.on_event("shutdown")
+async def _graceful_shutdown() -> None:
+    """Cancel in-flight generations + drain the executor on systemd SIGTERM.
+
+    Without this, uvicorn's graceful-shutdown only awaits HTTP requests —
+    the pipeline call runs in an executor thread that uvicorn doesn't know
+    about, so SIGKILL hits mid-step once systemd's TimeoutStopSec elapses.
+    Here we fire every per-job cancel event (the pipeline's
+    ``callback_on_step_end`` raises CancelledByUser at the next step, ~1-3s)
+    then explicitly drain the executor so the pipeline call has time to
+    return before the process exits.
+    """
+    print("zimt: shutdown — signaling in-flight generations to cancel")
+    for ev in list(CANCEL_EVENTS.values()):
+        ev.set()
+    # cancel_futures=True drops jobs that haven't started; in-flight ones
+    # are honored. wait=True blocks until the executor thread is idle.
+    EXECUTOR.shutdown(wait=True, cancel_futures=True)
+    print("zimt: shutdown complete")
 
 
 @app.get("/api/gpu_stats")

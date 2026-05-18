@@ -88,6 +88,36 @@
     z-index: 1;
   }
 
+  /* Intellisense-style suggestion popup. Positioned at the textarea caret
+     via JS — left/top set on every input/scroll event. */
+  .suggest-popup {
+    position: absolute;
+    display: none;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    min-width: 200px; max-width: 420px;
+    max-height: 220px; overflow-y: auto;
+    z-index: 50;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.55);
+    font: 13px ui-monospace, monospace;
+  }
+  .suggest-popup.open { display: block; }
+  .suggest-item {
+    padding: 4px 10px; cursor: pointer; color: var(--fg);
+    display: flex; gap: 10px; align-items: baseline; white-space: nowrap;
+  }
+  .suggest-item.selected { background: var(--accent); color: #fff; }
+  .suggest-item .suggest-label { flex: 0 0 auto; }
+  .suggest-item .suggest-match { color: var(--accent); font-weight: 600; }
+  .suggest-item.selected .suggest-match { color: #fff; text-decoration: underline; }
+  .suggest-item .suggest-desc {
+    flex: 1 1 auto; min-width: 0;
+    color: var(--muted); font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .suggest-item.selected .suggest-desc { color: rgba(255,255,255,0.85); }
+
   /* Syntax-highlight token colours. Kept loud — this is a power-user input. */
   .hl-cmd { color: var(--accent); font-weight: 600; }
   .hl-model { color: #7ad17a; }

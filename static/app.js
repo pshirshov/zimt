@@ -343,9 +343,6 @@ const input = $("prompt-input");
 let historyIdx = -1;          // -1 = editing fresh; otherwise index into LS.history()
 let editingDraft = "";        // saved when entering history mode
 
-// Tab completion cycling state
-let tabCtx = null;            // {origValue, origCursor, tokenStart, tokenEnd, matches, idx}
-
 function tokenAtCursor(value, cursor) {
   // bounded by whitespace
   let s = cursor; while (s > 0 && !/\s/.test(value[s - 1])) s--;
@@ -357,16 +354,52 @@ function tokensBefore(value, end) {
   return value.slice(0, end).split(/\s+/).filter(Boolean);
 }
 
-function completionPool(value, tokStart, tokText) {
-  // Pool depends on whether we're completing a /command or an argument of one.
-  // Heuristic: look at the previous non-empty token; if it's /model, complete model names.
+// Short one-line help shown next to /commands in the suggest popup.
+const COMMAND_HELP = {
+  "/help": "show command list",
+  "/?": "show command list",
+  "/quit": "exit (REPL only)",
+  "/exit": "exit (REPL only)",
+  "/q": "exit (REPL only)",
+  "/raw": "skip the model's auto-prefix",
+  "/many": "generate N images with sequential seeds",
+  "/seed": "pin seed for next gen",
+  "/cfg": "guidance scale",
+  "/steps": "num inference steps",
+  "/size": "set W H (free-form)",
+  "/res": "pick a model-preset resolution",
+  "/sampler": "switch scheduler",
+  "/clip_skip": "SDXL only — skip top N CLIP layers",
+  "/model": "load a model",
+  "/tokenize": "per-encoder token analysis",
+  "/negprompt": "set/clear negative prompt",
+};
+
+function completionItems(value, tokStart, tokText) {
+  // Returns a list of {label, desc} suggestions for the token at the cursor,
+  // filtered by what the user has typed so far.
   const before = tokensBefore(value, tokStart);
   const prev = before.length ? before[before.length - 1] : "";
+  const lower = tokText.toLowerCase();
+
   if (prev === "/model") {
-    return (state?.models ?? []).map(m => m.name);
+    const models = state?.models ?? [];
+    return models
+      .filter(m => m.name.toLowerCase().startsWith(lower))
+      .map(m => ({ label: m.name, desc: m.description }));
   }
-  // Default: only complete tokens that look like a /command.
-  if (tokText.startsWith("/")) return COMMANDS;
+  if (prev === "/sampler") {
+    if (!state?.loaded) return [];
+    const model = (state.models ?? []).find(m => m.name === state.model);
+    return (model?.samplers ?? [])
+      .filter(s => s.toLowerCase().startsWith(lower))
+      .map(s => ({ label: s, desc: "" }));
+  }
+  if (tokText.startsWith("/")) {
+    return COMMANDS
+      .filter(c => c.toLowerCase().startsWith(lower))
+      .map(c => ({ label: c, desc: COMMAND_HELP[c] ?? "" }));
+  }
   return [];
 }
 
@@ -467,20 +500,180 @@ function cursorOnLastLine() {
   return input.value.indexOf("\n", input.selectionStart) === -1;
 }
 
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Tab") {
-    e.preventDefault();
-    handleTab(e.shiftKey);
+// ---------- intellisense-style suggestion popup ----------
+// Updated on every input event; positioned at the textarea caret via a
+// short-lived measurement mirror. State machine:
+//   visible == true  → Up/Down navigate popup, Tab/click accept, Esc closes.
+//                      Up/Down do NOT scroll history when popup is open.
+//   visible == false → Up/Down do history navigation (edge-line aware).
+//                      Tab opens the popup (or accepts if exactly one match).
+const popup = $("suggest-popup");
+let suggest = {
+  visible: false,
+  items: [],
+  selected: 0,
+  tokenStart: 0,
+  tokenEnd: 0,
+  tokenText: "",
+};
+
+function caretCoords() {
+  // Stand up a hidden mirror with the same content+style as the textarea,
+  // place a marker at the caret, measure, tear it down. ~1ms.
+  const cs = getComputedStyle(input);
+  const mirror = document.createElement("div");
+  for (const p of ["boxSizing", "width", "padding", "border",
+                   "font", "lineHeight", "whiteSpace",
+                   "wordBreak", "overflowWrap"]) {
+    mirror.style.setProperty(p, cs.getPropertyValue(p));
+  }
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.top = "0";
+  mirror.style.left = "0";
+  mirror.style.pointerEvents = "none";
+  inputWrap.appendChild(mirror);
+
+  const before = input.value.slice(0, input.selectionStart);
+  mirror.textContent = before;
+  const marker = document.createElement("span");
+  marker.textContent = "​";          // zero-width but participates in layout
+  mirror.appendChild(marker);
+
+  const wrapRect = inputWrap.getBoundingClientRect();
+  const mr = marker.getBoundingClientRect();
+  const lineHeight = parseFloat(cs.lineHeight) || mr.height || 18;
+  inputWrap.removeChild(mirror);
+  return {
+    left: mr.left - wrapRect.left - input.scrollLeft,
+    top:  mr.top  - wrapRect.top  - input.scrollTop,
+    lineHeight,
+  };
+}
+
+function renderSuggest() {
+  const items = suggest.items;
+  if (!items.length) { popup.classList.remove("open"); popup.setAttribute("aria-hidden", "true"); return; }
+  popup.innerHTML = items.map((it, i) => {
+    const lbl = esc(it.label);
+    const matchLen = suggest.tokenText.length;
+    const labelHtml = matchLen
+      ? `<span class="suggest-match">${esc(it.label.slice(0, matchLen))}</span>${esc(it.label.slice(matchLen))}`
+      : lbl;
+    const desc = it.desc ? `<span class="suggest-desc">${esc(it.desc)}</span>` : "";
+    return `<div class="suggest-item${i === suggest.selected ? " selected" : ""}" data-i="${i}">`
+      + `<span class="suggest-label">${labelHtml}</span>${desc}</div>`;
+  }).join("");
+  popup.classList.add("open");
+  popup.setAttribute("aria-hidden", "false");
+  // Position at caret (one line below).
+  const c = caretCoords();
+  popup.style.left = Math.max(0, c.left) + "px";
+  popup.style.top  = (c.top + c.lineHeight + 2) + "px";
+  // Make sure the selected item is in view.
+  const sel = popup.querySelector(".suggest-item.selected");
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+}
+
+function updateSuggest() {
+  const value = input.value;
+  const cursor = input.selectionStart;
+  const tok = tokenAtCursor(value, cursor);
+  const items = completionItems(value, tok.start, tok.text);
+  if (!items.length) {
+    suggest = { visible: false, items: [], selected: 0,
+                tokenStart: 0, tokenEnd: 0, tokenText: "" };
+    popup.classList.remove("open");
+    popup.setAttribute("aria-hidden", "true");
     return;
   }
-  // Enter submits; Shift+Enter inserts a newline (textarea default).
+  suggest = {
+    visible: true, items, selected: 0,
+    tokenStart: tok.start, tokenEnd: tok.end, tokenText: tok.text,
+  };
+  renderSuggest();
+}
+
+function hideSuggest() {
+  suggest.visible = false;
+  popup.classList.remove("open");
+  popup.setAttribute("aria-hidden", "true");
+}
+
+function acceptSuggest() {
+  if (!suggest.visible || !suggest.items.length) return false;
+  const choice = suggest.items[suggest.selected].label;
+  const before = input.value.slice(0, suggest.tokenStart);
+  const after  = input.value.slice(suggest.tokenEnd);
+  // For most commands a trailing space is friendly (lets the user keep typing
+  // the argument). For zero-arity commands and prompts we don't add it.
+  const needsSpace = choice.startsWith("/") && !["/help", "/?", "/quit", "/exit", "/q", "/raw"].includes(choice);
+  const inject = choice + (needsSpace ? " " : "");
+  input.value = before + inject + after;
+  const newCursor = suggest.tokenStart + inject.length;
+  input.setSelectionRange(newCursor, newCursor);
+  autoResize();
+  // Re-trigger suggestions for the new context (eg. after /model picked,
+  // we might immediately want to start completing the model name).
+  updateSuggest();
+  return true;
+}
+
+popup.addEventListener("mousedown", (e) => {
+  const target = e.target.closest(".suggest-item");
+  if (!target) return;
+  e.preventDefault();  // keep focus in the textarea
+  suggest.selected = Number(target.dataset.i) || 0;
+  acceptSuggest();
+});
+
+input.addEventListener("blur", () => {
+  // Defer so a click on the popup can still register before we hide.
+  setTimeout(hideSuggest, 100);
+});
+
+input.addEventListener("keydown", (e) => {
+  // Popup-aware navigation first.
+  if (suggest.visible) {
+    if (e.key === "ArrowDown") {
+      suggest.selected = (suggest.selected + 1) % suggest.items.length;
+      renderSuggest();
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      suggest.selected = (suggest.selected - 1 + suggest.items.length) % suggest.items.length;
+      renderSuggest();
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      acceptSuggest();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      hideSuggest();
+      return;
+    }
+    // fall through — typing, Enter, etc. handled below
+  }
+
+  if (e.key === "Tab") {
+    // Popup wasn't open — open it (and accept if there's a unique match).
+    e.preventDefault();
+    updateSuggest();
+    if (suggest.visible && suggest.items.length === 1) acceptSuggest();
+    return;
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     submit();
     return;
   }
-  // Arrow up/down navigate history only when on the edge line of the textarea —
-  // otherwise let the native caret motion happen (within the multi-line value).
+  // Arrow up/down navigate history when the popup is closed AND the cursor
+  // is on the textarea's first / last line.
   if (e.key === "ArrowUp" && cursorOnFirstLine()) {
     const h = LS.history();
     if (!h.length) return;
@@ -501,42 +694,19 @@ input.addEventListener("keydown", (e) => {
     e.preventDefault();
     return;
   }
-  // Any other typing breaks tab/history cycling.
-  tabCtx = null;
   if (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete") historyIdx = -1;
+});
+
+// Recompute suggestions on every value or cursor change.
+input.addEventListener("input", updateSuggest);
+input.addEventListener("click", updateSuggest);
+input.addEventListener("keyup", (e) => {
+  // Arrow keys don't fire "input" but they do move the cursor — keep popup in sync.
+  if (e.key.startsWith("Arrow") && !suggest.visible) updateSuggest();
 });
 
 function moveCursorEnd() {
   const n = input.value.length; input.setSelectionRange(n, n);
-}
-
-function handleTab(shift) {
-  const value = input.value, cursor = input.selectionStart;
-  // (Re)build context if cursor/value diverged from saved state.
-  if (!tabCtx ||
-      tabCtx.origValue !== value ||
-      tabCtx.origCursor !== cursor) {
-    const tok = tokenAtCursor(value, cursor);
-    const pool = completionPool(value, tok.start, tok.text);
-    const matches = pool.filter(p => p.startsWith(tok.text));
-    if (matches.length === 0) return;
-    tabCtx = {
-      origValue: value, origCursor: cursor,
-      tokenStart: tok.start, tokenEnd: tok.end,
-      matches, idx: -1,
-    };
-  }
-  tabCtx.idx = (tabCtx.idx + (shift ? -1 : 1) + tabCtx.matches.length) % tabCtx.matches.length;
-  const choice = tabCtx.matches[tabCtx.idx];
-  const newValue = tabCtx.origValue.slice(0, tabCtx.tokenStart) + choice
-                 + tabCtx.origValue.slice(tabCtx.tokenEnd);
-  const newCursor = tabCtx.tokenStart + choice.length;
-  input.value = newValue;
-  input.setSelectionRange(newCursor, newCursor);
-  autoResize();
-  // pin the saved state to the new value/cursor so the next Tab keeps cycling
-  tabCtx.origValue = newValue; tabCtx.origCursor = newCursor;
-  tabCtx.tokenEnd = newCursor;
 }
 
 async function submit() {
@@ -546,7 +716,8 @@ async function submit() {
   if (!line.startsWith("/") || line.includes(" ")) pushRecent(line);
   // optimistic clear feels nicer; restore on error
   const saved = input.value;
-  input.value = ""; historyIdx = -1; tabCtx = null;
+  input.value = ""; historyIdx = -1;
+  hideSuggest();
   autoResize();
   try { await apiPost("/api/exec", { line }); }
   catch (e) {

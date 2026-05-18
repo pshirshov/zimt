@@ -31,6 +31,7 @@ let
     else {};
 
   hasTokenFile = cfg.hfTokenFile != null;
+  hasWebAuthTokenFile = cfg.webAuthTokenFile != null;
 
   startScript = pkgs.writeShellScript "zimt-start" ''
     set -euo pipefail
@@ -40,6 +41,14 @@ let
         export HF_TOKEN="$(cat "$CREDENTIALS_DIRECTORY/hf-token")"
       else
         echo "warning: hfTokenFile is set but credential not readable" >&2
+      fi
+    ''}
+    ${lib.optionalString hasWebAuthTokenFile ''
+      # Browser/API auth token. Sent as the Basic-auth password or a Bearer token.
+      if [ -r "$CREDENTIALS_DIRECTORY/web-auth-token" ]; then
+        export ZIMT_AUTH_TOKEN="$(cat "$CREDENTIALS_DIRECTORY/web-auth-token")"
+      else
+        echo "warning: webAuthTokenFile is set but credential not readable" >&2
       fi
     ''}
     exec ${cfg.package}/bin/zimt \
@@ -126,6 +135,19 @@ in
       '';
     };
 
+    webAuthTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = "/run/secrets/zimt-web-token";
+      description = ''
+        Path to a file containing the zimt web/API auth token. Loaded via
+        systemd ``LoadCredential`` and exported as ``ZIMT_AUTH_TOKEN`` at
+        start. When set, browsers authenticate with Basic auth using any
+        username and this token as the password; API clients may also send
+        ``Authorization: Bearer <token>``.
+      '';
+    };
+
     user = lib.mkOption {
       type = lib.types.str;
       default = "zimt";
@@ -189,7 +211,9 @@ in
         ReadWritePaths = [ cfg.outDir cfg.hfCacheDir ];
 
         LoadCredential =
-          lib.optional hasTokenFile "hf-token:${toString cfg.hfTokenFile}";
+          lib.optional hasTokenFile "hf-token:${toString cfg.hfTokenFile}"
+          ++ lib.optional hasWebAuthTokenFile
+            "web-auth-token:${toString cfg.webAuthTokenFile}";
 
         ExecStart = startScript;
         Restart = "on-failure";

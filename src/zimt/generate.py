@@ -185,7 +185,7 @@ def generate(
     ).images[0]
     dt = time.time() - t0
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     out = os.path.join(OUT_DIR, f"{ts}-{g.spec.name}-seed{seed}.png")
     image.save(out, pnginfo=_pnginfo(g, full_prompt, raw_prompt, seed))
     print(f"generated in {dt:.1f}s -> {out}")

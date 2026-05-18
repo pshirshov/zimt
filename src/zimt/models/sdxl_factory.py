@@ -50,4 +50,5 @@ def make_sdxl_loader(
         f"Load {repo_id} via diffusers StableDiffusionXLPipeline.from_pretrained, "
         f"with the madebyollin fp16-fix VAE substituted in bf16."
     )
+    setattr(load, "repo_id", repo_id)
     return load

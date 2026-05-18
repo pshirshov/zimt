@@ -12,10 +12,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import math
 import random
 import re
 import threading
 import uuid
+from dataclasses import replace
 from typing import Any
 
 from pydantic import BaseModel
@@ -34,9 +36,37 @@ class ExecBody(BaseModel):
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_MIN_STEPS = 1
+_MAX_STEPS = 100
+_MIN_DIMENSION = 64
+_MAX_DIMENSION = 2048
+_MAX_CFG = 30.0
+_MAX_PIXELS_BY_FAMILY = {
+    "sdxl": 1536 * 1536,
+    "zimage": 2048 * 2048,
+}
+
+
+def _validate_size(width: int, height: int) -> str | None:
+    assert STATE.g is not None
+    if width < _MIN_DIMENSION or height < _MIN_DIMENSION:
+        return f"width and height must be at least {_MIN_DIMENSION}"
+    if width > _MAX_DIMENSION or height > _MAX_DIMENSION:
+        return f"width and height must be at most {_MAX_DIMENSION}"
+    if width % 16 or height % 16:
+        return "width and height must be multiples of 16"
+    max_pixels = _MAX_PIXELS_BY_FAMILY[STATE.g.spec.family]
+    if width * height > max_pixels:
+        return f"total pixels must be at most {max_pixels} for {STATE.g.spec.family}"
+    return None
 
 
 async def _need_pipe(action: str, log: list[str]) -> bool:
+    if STATE.loading_model is not None:
+        msg = f"{action}: model {STATE.loading_model} is loading"
+        log.append(msg)
+        await emit_log(msg, level="error")
+        return False
     if STATE.g is None or STATE.pipe is None:
         msg = f"{action}: no model loaded"
         log.append(msg)
@@ -54,31 +84,47 @@ async def _exec_setting(
     g = STATE.g
     if cmd == "/cfg":
         try:
-            g.cfg = float(args[0])
-            log.append(f"cfg = {g.cfg}")
+            cfg = float(args[0])
+            if not math.isfinite(cfg) or cfg < 0.0 or cfg > _MAX_CFG:
+                log.append(f"/cfg: expected finite float 0..{_MAX_CFG:g}")
+                return
+            g.cfg = cfg
+            log.append(f"cfg = {cfg}")
             await emit_state()
         except (ValueError, IndexError):
-            log.append("/cfg: expected float")
+            log.append(f"/cfg: expected finite float 0..{_MAX_CFG:g}")
     elif cmd == "/steps":
         try:
-            g.steps = int(args[0])
-            log.append(f"steps = {g.steps}")
+            steps = int(args[0])
+            if steps < _MIN_STEPS or steps > _MAX_STEPS:
+                log.append(f"/steps: expected int {_MIN_STEPS}..{_MAX_STEPS}")
+                return
+            g.steps = steps
+            log.append(f"steps = {steps}")
             await emit_state()
         except (ValueError, IndexError):
-            log.append("/steps: expected int")
+            log.append(f"/steps: expected int {_MIN_STEPS}..{_MAX_STEPS}")
     elif cmd == "/size":
         try:
             w, h = int(args[0]), int(args[1])
+            err = _validate_size(w, h)
+            if err is not None:
+                log.append(f"/size: {err}")
+                return
             g.width, g.height = w, h
             log.append(f"size = {w}x{h}")
             await emit_state()
         except (ValueError, IndexError):
             log.append("/size: expected W H")
     elif cmd == "/res":
-        picked = parse_res(args[0] if args else "", g.spec.resolutions)
+        picked = parse_res(args[0] if args else "", g.spec.resolutions, warn=False)
         if picked is None:
             log.append("/res: expected <N> or WxH")
         else:
+            err = _validate_size(picked[0], picked[1])
+            if err is not None:
+                log.append(f"/res: {err}")
+                return
             g.width, g.height = picked
             log.append(f"size = {picked[0]}x{picked[1]}")
             await emit_state()
@@ -229,6 +275,11 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
     job_ids: list[str] = []
     if not prompt_text.strip():
         return {"job_ids": job_ids, "log": log}
+    if STATE.loading_model is not None:
+        msg = f"generate: model {STATE.loading_model} is loading"
+        log.append(msg)
+        await emit_log(msg, level="error")
+        return {"job_ids": job_ids, "log": log}
     if STATE.pipe is None or STATE.g is None:
         msg = "generate: no model loaded"
         log.append(msg)
@@ -244,9 +295,10 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
             seed=seed,
             model=STATE.g.spec.name,
         )
+        g_snapshot = replace(STATE.g)
         STATE.jobs[job.id] = job
         CANCEL_EVENTS[job.id] = threading.Event()
         job_ids.append(job.id)
         await emit_job(job)
-        asyncio.create_task(run_job(job, prompt_text, seed, raw_flag))
+        asyncio.create_task(run_job(job, prompt_text, seed, raw_flag, g_snapshot))
     return {"job_ids": job_ids, "log": log}

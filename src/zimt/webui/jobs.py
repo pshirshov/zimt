@@ -13,18 +13,20 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from typing import Any
 
 from ..generate import CancelledByUser, generate
+from ..generate import GenConfig
 from ..paths import OUT_DIR
 from .outputs import read_png_meta
 from .state import CANCEL_EVENTS, EXECUTOR, Job, PIPE_LOCK, STATE
 from .ws import broadcast, emit_job
 
 
-def _run_generate_sync(job: Job, raw_prompt: str, seed: int, raw: bool,
+def _run_generate_sync(job: Job, pipe: Any, g: GenConfig,
+                       raw_prompt: str, seed: int, raw: bool,
                        loop: asyncio.AbstractEventLoop) -> str:
     """Worker-thread entry. Builds the cancel/progress callback then dispatches."""
-    assert STATE.pipe is not None and STATE.g is not None
     ev = CANCEL_EVENTS.get(job.id)
 
     def _on_step(step: int, total: int) -> None:
@@ -36,11 +38,12 @@ def _run_generate_sync(job: Job, raw_prompt: str, seed: int, raw: bool,
         asyncio.run_coroutine_threadsafe(emit_job(job), loop)
 
     return generate(
-        STATE.pipe, STATE.g, raw_prompt, seed, raw=raw, on_step=_on_step,
+        pipe, g, raw_prompt, seed, raw=raw, on_step=_on_step,
     )
 
 
-async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool) -> None:
+async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool,
+                  g: GenConfig) -> None:
     """Acquire the pipeline lock, run one generation, broadcast events."""
     async with PIPE_LOCK:
         ev = CANCEL_EVENTS.get(job.id)
@@ -52,9 +55,17 @@ async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool) -> None:
             await emit_job(job)
             return
 
-        if STATE.pipe is None or STATE.g is None:
+        pipe = STATE.pipe
+        if pipe is None:
             job.status = "error"
             job.error = "no model loaded"
+            job.ts_done = datetime.now().timestamp()
+            CANCEL_EVENTS.pop(job.id, None)
+            await emit_job(job)
+            return
+        if STATE.g is None or STATE.g.spec.name != g.spec.name:
+            job.status = "error"
+            job.error = f"loaded model changed before generation: expected {g.spec.name}"
             job.ts_done = datetime.now().timestamp()
             CANCEL_EVENTS.pop(job.id, None)
             await emit_job(job)
@@ -62,15 +73,15 @@ async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool) -> None:
 
         from ..generate import compose_prompt
         job.status = "running"
-        job.model = STATE.g.spec.name
-        job.full_prompt = compose_prompt(STATE.g.spec, raw_prompt, raw=raw)
-        job.negative_prompt = STATE.g.negative_prompt if STATE.g.cfg > 0 else ""
+        job.model = g.spec.name
+        job.full_prompt = compose_prompt(g.spec, raw_prompt, raw=raw)
+        job.negative_prompt = g.negative_prompt if g.cfg > 0 else ""
         await emit_job(job)
 
         try:
             loop = asyncio.get_running_loop()
             path = await loop.run_in_executor(
-                EXECUTOR, _run_generate_sync, job, raw_prompt, seed, raw, loop,
+                EXECUTOR, _run_generate_sync, job, pipe, g, raw_prompt, seed, raw, loop,
             )
         except CancelledByUser:
             job.status = "canceled"

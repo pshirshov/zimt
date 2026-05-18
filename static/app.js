@@ -549,29 +549,20 @@ function renderHighlight() {
   highlight.innerHTML = out;
 }
 
-function cursorOnFirstLine() {
-  return input.value.lastIndexOf("\n", input.selectionStart - 1) === -1;
-}
-function cursorOnLastLine() {
-  return input.value.indexOf("\n", input.selectionStart) === -1;
-}
-
 // ---------- intellisense-style suggestion popup ----------
 // Updated on every input event; positioned at the textarea caret via a
 // short-lived measurement mirror.
 //
-// Key handling — arrows are reserved for history navigation, so the popup
-// is driven by Tab (sublime-style cycling). Each Tab rewrites the token
-// at the cursor with the next candidate; Shift+Tab rewinds. The original
-// typed prefix is preserved in `tokenText` so cycling stays consistent
-// across replacements.
+// Key handling — the popup is driven by Tab (sublime-style cycling). Each
+// Tab rewrites the token at the cursor with the next candidate; Shift+Tab
+// rewinds. The original typed prefix is preserved in `tokenText` so cycling
+// stays consistent across replacements.
 //
 //   Tab        → cycle selection forward, rewrite token
 //   Shift+Tab  → cycle selection backward, rewrite token
 //   Esc        → dismiss popup (without undoing the current replacement)
 //   click item → jump to that item + dismiss
 //   typing     → rebuild popup from the new token, selected=0
-//   ↑ / ↓      → history navigation (unchanged; popup never captures them)
 //   Enter      → submit (unchanged; popup never captures it)
 const popup = $("suggest-popup");
 let suggest = {
@@ -790,15 +781,22 @@ input.addEventListener("keydown", (e) => {
     submit();
     return;
   }
-  // Arrows. The "special" action (cycle popup if open, otherwise history)
-  // only fires on the textarea's edge lines — on middle lines arrows do
-  // native cursor motion so multi-line prompts behave like a normal
-  // editor.
-  if (e.key === "ArrowUp" && cursorOnFirstLine()) {
+  // Arrows behave like a normal multiline editor except at absolute text
+  // boundaries: start + Up enters older prompt history, end + Down returns
+  // toward the current draft.
+  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    const action = promptArrowAction(
+      input.value, input.selectionStart, input.selectionEnd, e.key,
+    );
+    if (action === "native") return;
     e.preventDefault();
-    if (suggest.visible) {
-      cycleSuggest(-1);
-    } else {
+    if (action === "move-start") {
+      input.setSelectionRange(0, 0);
+      updateSuggest();
+    } else if (action === "move-end") {
+      moveCursorEnd();
+      updateSuggest();
+    } else if (action === "history-prev") {
       const h = LS.history();
       if (!h.length) return;
       if (historyIdx === -1) { editingDraft = input.value; historyIdx = 0; }
@@ -806,19 +804,14 @@ input.addEventListener("keydown", (e) => {
       input.value = h[historyIdx];
       moveCursorEnd();
       autoResize();
-    }
-    return;
-  }
-  if (e.key === "ArrowDown" && cursorOnLastLine()) {
-    e.preventDefault();
-    if (suggest.visible) {
-      cycleSuggest(+1);
-    } else {
+      updateSuggest();
+    } else if (action === "history-next") {
       if (historyIdx === -1) return;
       historyIdx -= 1;
       input.value = historyIdx < 0 ? editingDraft : LS.history()[historyIdx];
       moveCursorEnd();
       autoResize();
+      updateSuggest();
     }
     return;
   }
@@ -830,7 +823,7 @@ input.addEventListener("input", updateSuggest);
 input.addEventListener("click", updateSuggest);
 input.addEventListener("keyup", (e) => {
   // Arrow keys don't fire "input" but they do move the cursor — keep popup in sync.
-  if (e.key.startsWith("Arrow") && !suggest.visible) updateSuggest();
+  if (e.key.startsWith("Arrow")) updateSuggest();
 });
 
 function moveCursorEnd() {

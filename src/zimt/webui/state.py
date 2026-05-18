@@ -53,6 +53,7 @@ class AppState:
     """Per-process state — singleton :data:`STATE` below."""
     pipe: Any | None = None
     g: GenConfig | None = None
+    loading_model: str | None = None
     jobs: dict[str, Job] = field(default_factory=dict)
     clients: set[WebSocket] = field(default_factory=set)
 
@@ -60,6 +61,7 @@ class AppState:
         return {
             "loaded": self.pipe is not None,
             "model": self.g.spec.name if self.g else None,
+            "loading_model": self.loading_model,
             "models": [
                 {"name": n, "description": m.description,
                  "family": m.family,

@@ -51,14 +51,16 @@ _ORIENTATION_PREDICATES: dict[str, Any] = {
 }
 
 
-def parse_res(arg: str, presets: list[Resolution]) -> tuple[int, int] | None:
+def parse_res(
+    arg: str, presets: list[Resolution], *, warn: bool = True,
+) -> tuple[int, int] | None:
     """Parse one of: ``<N>`` (1-based preset index), ``WxH``, ``W H``, or
     one of ``square`` / ``landscape`` / ``portrait``.
 
     Orientation keywords pick the largest matching preset by area. Returns
-    ``(w, h)`` or ``None`` for unparseable input. Warns on stdout when W
-    or H isn't a multiple of 16 — Z-Image silently rounds those down,
-    SDXL just degrades.
+    ``(w, h)`` or ``None`` for unparseable input. When ``warn`` is true,
+    warns on stdout when W or H isn't a multiple of 16 — Z-Image silently
+    rounds those down, SDXL just degrades.
     """
     s = arg.strip()
     lower = s.lower()
@@ -82,7 +84,7 @@ def parse_res(arg: str, presets: list[Resolution]) -> tuple[int, int] | None:
                 w, h = int(parts[0].strip()), int(parts[1].strip())
             except ValueError:
                 return None
-            if w % 16 or h % 16:
+            if warn and (w % 16 or h % 16):
                 print(f"warning: {w}x{h} not divisible by 16 — "
                       "Z-Image silently rounds, SDXL may degrade")
             return (w, h)

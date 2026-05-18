@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hmac
 import io
 import json
 import os
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -23,6 +26,58 @@ from .state import CANCEL_EVENTS, EXECUTOR, STATE
 from .ws import broadcast, emit_job
 
 app = FastAPI()
+
+
+def _web_auth_token() -> str:
+    return os.environ.get("ZIMT_AUTH_TOKEN", "")
+
+
+def _auth_matches(auth_header: str, token: str) -> bool:
+    if not token:
+        return True
+    if auth_header.startswith("Bearer "):
+        return hmac.compare_digest(auth_header.removeprefix("Bearer ").strip(), token)
+    if not auth_header.startswith("Basic "):
+        return False
+    encoded = auth_header.removeprefix("Basic ").strip()
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    _user, sep, password = decoded.partition(":")
+    if not sep:
+        return False
+    return hmac.compare_digest(password, token)
+
+
+def _origin_allowed(origin: str, host: str) -> bool:
+    if not origin:
+        return True
+    same_host = {f"http://{host}", f"https://{host}"}
+    configured = os.environ.get("ZIMT_ALLOWED_ORIGINS", "")
+    if configured:
+        allowed = {item.strip() for item in configured.split(",") if item.strip()}
+        return origin in allowed or origin in same_host
+    return origin in same_host
+
+
+def _request_permitted(headers: Any) -> bool:
+    host = headers.get("host", "")
+    origin = headers.get("origin", "")
+    if not _origin_allowed(origin, host):
+        return False
+    return _auth_matches(headers.get("authorization", ""), _web_auth_token())
+
+
+@app.middleware("http")
+async def _require_auth(request: Request, call_next: Any) -> Response:
+    if _request_permitted(request.headers):
+        return await call_next(request)
+    return Response(
+        content="authentication required",
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="zimt", charset="UTF-8"'},
+    )
 
 
 class _NoCacheStaticFiles(StaticFiles):
@@ -260,6 +315,9 @@ async def api_outputs_cleanup() -> dict[str, Any]:
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
+    if not _request_permitted(ws.headers):
+        await ws.close(code=1008)
+        return
     await ws.accept()
     STATE.clients.add(ws)
     try:

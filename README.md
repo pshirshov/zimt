@@ -18,9 +18,13 @@ Models currently supported:
 | `illustrious-xl-v1` | `WhiteAiZ/Illustrious-xl-v1.0` | anime-focused SDXL fine-tune |
 | `hassaku-xl-illustrious` | `John6666/hassaku-xl-illustrious-v31-sdxl` | Illustrious-family, anime-realistic |
 | `wai-nsfw-illustrious` | `John6666/wai-nsfw-illustrious-v80-sdxl` | Illustrious-family, NSFW-focused |
+| `wai-nsfw-illustrious-v110` | `John6666/wai-nsfw-illustrious-v110-sdxl` | Illustrious-family, newer NSFW-focused checkpoint |
+| `wai-mature-illustrious` | `John6666/wai-mature-illustrious-v20-sdxl` | Illustrious-family, mature/body/style focus |
 | `noobai-xl-vpred` | `Laxhar/noobai-XL-Vpred-1.0` | Illustrious-family, **v-prediction** — needs `scheduler_overrides` (handled) |
 | `animagine-xl-4` | `cagliostrolab/animagine-xl-4.0` | Cagliostro's flagship anime SDXL |
 | `cyberrealistic-pony` | `John6666/cyberrealistic-pony-v85-sdxl` | Pony-family, photorealism focus |
+| `pony-realism-v23` | `John6666/pony-realism-v23-sdxl` | Pony-family, photorealism focus |
+| `spicy-realism-nsfw-mix` | `John6666/spicy-realism-nsfw-mix-v30-sdxl` | Pony-family, adult photorealism focus |
 
 The fp16-fix VAE is wired through a shared `make_sdxl_loader` factory
 (`src/zimt/models/sdxl_factory.py`), so adding another SDXL fine-tune is
@@ -48,6 +52,11 @@ Useful CLI flags:
 * `--out-dir DIR` — where PNGs are saved (default `./out`; falls back to
   `$XDG_DATA_HOME/zimt/out` when installed from `/nix/store`).
 * `--hf-cache DIR` — `HF_HOME` for the diffusers / transformers cache.
+* `ZIMT_AUTH_TOKEN` — optional web/API token. Browsers can use Basic auth
+  with any username and this token as the password; API clients can send
+  `Authorization: Bearer <token>`.
+* `ZIMT_ALLOWED_ORIGINS` — optional comma-separated origin allow-list. If
+  unset, requests with an `Origin` header must match the request host.
 
 ## REPL / web command surface
 

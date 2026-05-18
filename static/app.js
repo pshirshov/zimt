@@ -46,9 +46,9 @@ function connectWs() {
     }
     else if (m.type === "gpu_stats") onGpuStats(m.stats);
     else if (m.type === "log") appendLog(m.message, m.level);
-    else if (m.type === "model_loading") appendLog(`loading ${m.model}…`);
-    else if (m.type === "model_loaded")  appendLog(`loaded ${m.model}`);
-    else if (m.type === "model_error")   appendLog(`load error: ${m.error}`, "error");
+    else if (m.type === "model_loading") onModelLoading(m.model);
+    else if (m.type === "model_loaded")  onModelLoaded(m.model);
+    else if (m.type === "model_error")   onModelError(m.error);
   };
 }
 
@@ -83,13 +83,40 @@ function fmtState(s) {
   return lines.join("\n");
 }
 
+// Model-loading state for the topbar pill. While loading we override the
+// pill text + add a pulsing class until model_loaded / model_error fires.
+let modelLoading = "";
+
 function onStateUpdate(s) {
   state = s;
-  $("model-state").textContent = s.loaded ? s.model : "no model";
-  $("model-state").className = "pill" + (s.loaded ? " ok" : "");
+  if (!modelLoading) {
+    $("model-state").textContent = s.loaded ? s.model : "no model";
+    $("model-state").className = "pill" + (s.loaded ? " ok" : "");
+  }
   const pre = $("state-text");
   pre.textContent = fmtState(s);
   pre.classList.toggle("empty", !s.loaded);
+}
+
+function onModelLoading(name) {
+  modelLoading = name;
+  $("model-state").textContent = `loading ${name}…`;
+  $("model-state").className = "pill loading";
+  appendLog(`loading ${name}…`);
+}
+function onModelLoaded(name) {
+  modelLoading = "";
+  // onStateUpdate will run next (the server emits state right after) — the
+  // pill will catch up. Update immediately as well so users see the change.
+  $("model-state").textContent = name;
+  $("model-state").className = "pill ok";
+  appendLog(`loaded ${name}`);
+}
+function onModelError(err) {
+  modelLoading = "";
+  $("model-state").textContent = "load error";
+  $("model-state").className = "pill err";
+  appendLog(`load error: ${err}`, "error");
 }
 
 function onJob(j) {
@@ -410,8 +437,18 @@ function completionItems(value, tokStart, tokText) {
     if (!state?.loaded) return [];
     const model = (state.models ?? []).find(m => m.name === state.model);
     const presets = model?.resolutions ?? [];
-    return presets
-      .map(r => ({ label: `${r.w}x${r.h}`, desc: r.label }))
+    // Orientation keywords: largest preset by area in each category.
+    const byArea = (a, b) => (b.w * b.h) - (a.w * a.h);
+    const sq = [...presets].sort(byArea).find(r => r.w === r.h);
+    const ls = [...presets].sort(byArea).find(r => r.w > r.h);
+    const pt = [...presets].sort(byArea).find(r => r.w < r.h);
+    const orientations = [
+      sq && { label: "square",    desc: `largest 1:1 (${sq.w}x${sq.h})` },
+      ls && { label: "landscape", desc: `largest W>H (${ls.w}x${ls.h})` },
+      pt && { label: "portrait",  desc: `largest W<H (${pt.w}x${pt.h})` },
+    ].filter(Boolean);
+    const explicit = presets.map(r => ({ label: `${r.w}x${r.h}`, desc: r.label }));
+    return [...orientations, ...explicit]
       .filter(it => it.label.toLowerCase().startsWith(lower));
   }
   if (tokText.startsWith("/")) {
@@ -687,7 +724,16 @@ input.addEventListener("keydown", (e) => {
     hideSuggest();
     return;
   }
-  // Enter submits; Shift+Enter inserts a newline (textarea default).
+  // Enter while popup is open: accept the highlighted item + dismiss popup.
+  // (User can press Enter again on the next line to actually submit.)
+  if (e.key === "Enter" && !e.shiftKey && suggest.visible) {
+    e.preventDefault();
+    suggest.cycling = true;  // ensure cycleSuggest(0) writes the selection
+    cycleSuggest(0);
+    hideSuggest();
+    return;
+  }
+  // Enter (popup closed): submit. Shift+Enter inserts a newline.
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     submit();

@@ -18,9 +18,48 @@ shows memory; users who want util can read it in their terminal.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, TypedDict
 
 import torch
+
+# Friendly names for Intel discrete-GPU PCI IDs. intel-compute-runtime
+# emits e.g. "Intel(R) Graphics [0xe223]" for IDs it doesn't recognise,
+# which is uninformative in the top bar. Update this map as Intel ships
+# silicon — only entries we've personally observed (or confirmed via
+# kernel xe_pci.c) belong here.
+INTEL_GPU_NAMES: dict[int, str] = {
+    # Battlemage Arc Pro B-series (project's daily driver)
+    0xE223: "Intel Arc Pro B70",
+    # Battlemage consumer Arc B-series
+    0xE20B: "Intel Arc B580",
+    0xE20C: "Intel Arc B570",
+    # Alchemist Arc A-series — selected most-common IDs
+    0x56A0: "Intel Arc A770",
+    0x56A1: "Intel Arc A750",
+    0x56A5: "Intel Arc A380",
+    0x56A6: "Intel Arc A310",
+}
+
+_PCI_RE = re.compile(r"\[0x([0-9a-fA-F]+)\]")
+
+
+def _friendly_intel_name(raw: str) -> str:
+    """Normalise an intel-compute-runtime device name string.
+
+    "Intel(R) Graphics [0xe223]"  →  "Intel Arc Pro B70"     (known ID)
+    "Intel(R) Graphics [0xe2ff]"  →  "Intel Graphics [0xe2ff]"  (unknown)
+    "Intel(R) Arc(TM) A770 ..."   →  "Intel Arc A770 ..."       (no ID)
+    """
+    m = _PCI_RE.search(raw)
+    if m:
+        pci = int(m.group(1), 16)
+        if pci in INTEL_GPU_NAMES:
+            return INTEL_GPU_NAMES[pci]
+    # Generic cleanup: drop the "(R)" / "(TM)" registered-marks noise.
+    cleaned = raw.replace("(R)", "").replace("(TM)", "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 class GpuStats(TypedDict):
@@ -36,11 +75,11 @@ def _xpu_stats() -> GpuStats | None:
         return None
     try:
         props = torch.xpu.get_device_properties(0)
-        name = getattr(props, "name", "Intel XPU")
+        raw_name = getattr(props, "name", "Intel XPU")
         total = int(getattr(props, "total_memory", 0))
         return GpuStats(
             backend="xpu",
-            device=name,
+            device=_friendly_intel_name(raw_name),
             allocated_bytes=int(torch.xpu.memory_allocated(0)),
             reserved_bytes=int(torch.xpu.memory_reserved(0)),
             total_bytes=total,

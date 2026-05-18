@@ -13,6 +13,8 @@ Each entry is ``(width, height, label)``. The first entry is the default.
 
 from __future__ import annotations
 
+from typing import Any
+
 Resolution = tuple[int, int, str]
 
 SDXL_BUCKETS: list[Resolution] = [
@@ -40,14 +42,32 @@ ZIMAGE_BUCKETS: list[Resolution] = [
 ]
 
 
-def parse_res(arg: str, presets: list[Resolution]) -> tuple[int, int] | None:
-    """Parse one of: ``<N>`` (1-based preset index), ``WxH``, or ``W H``.
+# Orientation keywords accepted by `/res`. Each picks the largest preset
+# (by total pixel area) whose aspect matches the requested orientation.
+_ORIENTATION_PREDICATES: dict[str, Any] = {
+    "square":    lambda w, h: w == h,
+    "landscape": lambda w, h: w > h,
+    "portrait":  lambda w, h: w < h,
+}
 
-    Returns ``(w, h)`` or ``None`` for an unparseable input. Warns on stdout
-    when W or H isn't a multiple of 16 — Z-Image silently rounds those down,
+
+def parse_res(arg: str, presets: list[Resolution]) -> tuple[int, int] | None:
+    """Parse one of: ``<N>`` (1-based preset index), ``WxH``, ``W H``, or
+    one of ``square`` / ``landscape`` / ``portrait``.
+
+    Orientation keywords pick the largest matching preset by area. Returns
+    ``(w, h)`` or ``None`` for unparseable input. Warns on stdout when W
+    or H isn't a multiple of 16 — Z-Image silently rounds those down,
     SDXL just degrades.
     """
     s = arg.strip()
+    lower = s.lower()
+    if lower in _ORIENTATION_PREDICATES:
+        pred = _ORIENTATION_PREDICATES[lower]
+        candidates = [(w, h) for w, h, _ in presets if pred(w, h)]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda wh: wh[0] * wh[1])
     if s.isdigit():
         idx = int(s)
         if 1 <= idx <= len(presets):

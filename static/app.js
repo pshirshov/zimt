@@ -584,9 +584,10 @@ let suggest = {
   cycling: false,   // true once Tab has been pressed; further Tabs cycle
 };
 
-function caretCoords() {
-  // Stand up a hidden mirror with the same content+style as the textarea,
-  // place a marker at the caret, measure, tear it down. ~1ms.
+// Measure the pixel position of a character offset inside the textarea.
+// Used both for the popup anchor (token start) and, indirectly, for caret
+// positioning. Standard "mirror div" technique — ~1ms per call.
+function offsetCoords(offset) {
   const cs = getComputedStyle(input);
   const mirror = document.createElement("div");
   for (const p of ["boxSizing", "width", "padding", "border",
@@ -601,8 +602,7 @@ function caretCoords() {
   mirror.style.pointerEvents = "none";
   inputWrap.appendChild(mirror);
 
-  const before = input.value.slice(0, input.selectionStart);
-  mirror.textContent = before;
+  mirror.textContent = input.value.slice(0, offset);
   const marker = document.createElement("span");
   marker.textContent = "​";          // zero-width but participates in layout
   mirror.appendChild(marker);
@@ -633,8 +633,9 @@ function renderSuggest() {
   }).join("");
   popup.classList.add("open");
   popup.setAttribute("aria-hidden", "false");
-  // Position at caret (one line below).
-  const c = caretCoords();
+  // Anchor at the START of the token being completed, not the caret —
+  // otherwise the popup jumps right as the user types more characters.
+  const c = offsetCoords(suggest.tokenStart);
   popup.style.left = Math.max(0, c.left) + "px";
   popup.style.top  = (c.top + c.lineHeight + 2) + "px";
   // Make sure the selected item is in view.
@@ -789,38 +790,36 @@ input.addEventListener("keydown", (e) => {
     submit();
     return;
   }
-  // Arrows: navigate the popup when it's open (same behaviour as
-  // Tab/Shift-Tab — preview cycle, no trailing space, no commit). When
-  // the popup is closed, arrows fall through to history navigation on
-  // the textarea's edge lines.
-  if (e.key === "ArrowDown" && suggest.visible) {
-    e.preventDefault();
-    cycleSuggest(+1);
-    return;
-  }
-  if (e.key === "ArrowUp" && suggest.visible) {
-    e.preventDefault();
-    cycleSuggest(-1);
-    return;
-  }
+  // Arrows. The "special" action (cycle popup if open, otherwise history)
+  // only fires on the textarea's edge lines — on middle lines arrows do
+  // native cursor motion so multi-line prompts behave like a normal
+  // editor.
   if (e.key === "ArrowUp" && cursorOnFirstLine()) {
-    const h = LS.history();
-    if (!h.length) return;
-    if (historyIdx === -1) { editingDraft = input.value; historyIdx = 0; }
-    else if (historyIdx < h.length - 1) historyIdx += 1;
-    input.value = h[historyIdx];
-    moveCursorEnd();
-    autoResize();
     e.preventDefault();
+    if (suggest.visible) {
+      cycleSuggest(-1);
+    } else {
+      const h = LS.history();
+      if (!h.length) return;
+      if (historyIdx === -1) { editingDraft = input.value; historyIdx = 0; }
+      else if (historyIdx < h.length - 1) historyIdx += 1;
+      input.value = h[historyIdx];
+      moveCursorEnd();
+      autoResize();
+    }
     return;
   }
   if (e.key === "ArrowDown" && cursorOnLastLine()) {
-    if (historyIdx === -1) return;
-    historyIdx -= 1;
-    input.value = historyIdx < 0 ? editingDraft : LS.history()[historyIdx];
-    moveCursorEnd();
-    autoResize();
     e.preventDefault();
+    if (suggest.visible) {
+      cycleSuggest(+1);
+    } else {
+      if (historyIdx === -1) return;
+      historyIdx -= 1;
+      input.value = historyIdx < 0 ? editingDraft : LS.history()[historyIdx];
+      moveCursorEnd();
+      autoResize();
+    }
     return;
   }
   if (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete") historyIdx = -1;
@@ -911,9 +910,36 @@ function onGpuStats(s) {
   }
 }
 
+// ---------- mobile tab toggle ----------
+function setupMobileTabs() {
+  function applyDefault() {
+    // Default to the prompt view on first load when we're below the
+    // CSS breakpoint. Doesn't reapply on resize — once the user has
+    // picked a tab their choice sticks.
+    if (window.innerWidth <= 800 &&
+        !document.body.classList.contains("mobile-view-browser")) {
+      document.body.classList.add("mobile-view-prompt");
+    }
+  }
+  applyDefault();
+  window.addEventListener("resize", applyDefault, { passive: true });
+
+  for (const btn of document.querySelectorAll(".mtab")) {
+    btn.addEventListener("click", () => {
+      const view = btn.dataset.view;  // "prompt" | "browser"
+      document.body.classList.remove("mobile-view-prompt", "mobile-view-browser");
+      document.body.classList.add(`mobile-view-${view}`);
+      for (const x of document.querySelectorAll(".mtab")) {
+        x.classList.toggle("active", x === btn);
+      }
+    });
+  }
+}
+
 async function init() {
   renderRecent();
   setupSplitter();
+  setupMobileTabs();
   autoResize();
   renderHighlight();
   connectWs();

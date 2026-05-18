@@ -137,6 +137,51 @@
 
   /* GPU stats pill sits on the right edge of the topbar. */
   .gpu-pill { margin-left: auto; font-family: ui-monospace, monospace; }
+
+  /* Mobile tabs: hidden on desktop, shown below the breakpoint. They
+     toggle which pane (.left / .right) is visible. The body gets a
+     `mobile-view-prompt` / `mobile-view-browser` class that the
+     viewport-conditional rules below pick up. */
+  .mobile-tabs { display: none; }
+  .mtab {
+    flex: 1 1 0; padding: 10px 12px; border-radius: 0;
+    background: var(--panel); color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    border-left: 0; border-right: 0; border-top: 0;
+    font: 13px ui-monospace, monospace;
+  }
+  .mtab.active { background: var(--bg); color: var(--fg); border-bottom-color: var(--accent); }
+
+  @media (max-width: 800px) {
+    /* Stack the layout: full-width single pane, swap via tabs. */
+    .layout { flex-direction: column; }
+    .splitter { display: none; }
+    .left, .right { width: 100% !important; min-height: 0; flex: 1 1 auto; }
+
+    .mobile-tabs { display: flex; }
+    body.mobile-view-prompt  .right { display: none; }
+    body.mobile-view-browser .left  { display: none; }
+
+    /* Tighten chrome on small screens. */
+    .topbar { gap: 6px; padding: 8px 10px; flex-wrap: wrap; }
+    .topbar h1 { font-size: 13px; }
+    .pill { font-size: 10px; }
+    .gpu-pill { margin-left: 0; }
+    .prompt-bar { padding: 8px 10px; }
+    .prompt-bar textarea, .prompt-highlight {
+      font-size: 16px;             /* >=16px stops iOS Safari auto-zoom-on-focus */
+      padding: 8px 10px;
+    }
+    .prompt-actions, .log-row { gap: 4px; flex-wrap: wrap; }
+    .gen-btn { padding: 0 14px; }
+    .left-content, .right-content { padding: 10px; }
+    .section { margin-bottom: 14px; }
+    .thumbs { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px; }
+    /* Stack the image modal vertically below this width too. */
+    .modal { padding: 8px; }
+    .modal-inner { flex-direction: column; padding: 10px; gap: 10px; }
+    .modal-side { flex: 0 0 auto; }
+  }
   .left-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; }
 
   /* Right pane: header stays put, only thumbnails scroll. */

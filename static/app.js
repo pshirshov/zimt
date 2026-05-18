@@ -188,6 +188,14 @@ function renderThumbs() {
     const img = document.createElement("img"); img.loading = "lazy";
     img.src = `/api/outputs/${encodeURIComponent(e.name)}?thumb=192`;
     d.appendChild(img);
+    // Top-left: reload-to-prompt. Mirrors the modal's Restore button.
+    const reload = document.createElement("button");
+    reload.className = "reload-btn";
+    reload.textContent = "↻";
+    reload.title = "restore prompt + settings from this image";
+    reload.onclick = (ev) => { ev.stopPropagation(); restoreToPrompt(e); };
+    d.appendChild(reload);
+    // Top-right: favorite toggle.
     const star = document.createElement("button");
     star.className = "star-btn" + (e.fav ? " on" : "");
     star.textContent = e.fav ? "★" : "☆";
@@ -313,10 +321,12 @@ $("modal-close").onclick = () => $("modal").classList.remove("open");
 $("modal").onclick = (e) => { if (e.target === $("modal")) $("modal").classList.remove("open"); };
 $("modal-fav").onclick = () => { if (modalEntry) toggleFavorite(modalEntry); };
 
-// "Restore to prompt": build a single /api/exec line that recreates the run.
-$("modal-restore").onclick = () => {
-  if (!modalEntry) return;
-  const meta = modalEntry.metadata || {};
+// Build a single /api/exec line that recreates a previous run, and load it
+// into the prompt textarea. Shared between the modal's Restore button and
+// the per-thumbnail ↻ reload button.
+function restoreToPrompt(entry) {
+  if (!entry) return;
+  const meta = entry.metadata || {};
   const parts = [];
   if (meta.model) parts.push(`/model ${meta.model}`);
   if (meta.cfg)   parts.push(`/cfg ${meta.cfg}`);
@@ -336,7 +346,8 @@ $("modal-restore").onclick = () => {
   autoResize();
   $("modal").classList.remove("open");
   $("prompt-input").focus();
-};
+}
+$("modal-restore").onclick = () => restoreToPrompt(modalEntry);
 
 // ---------- prompt input: readline-style ----------
 const input = $("prompt-input");

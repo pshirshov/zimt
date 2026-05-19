@@ -13,7 +13,7 @@ from fastapi import HTTPException
 import zimt.webui.app as web_app
 from zimt.generate import GenConfig
 from zimt.models.registry import MODELS
-from zimt.webui import exec_api, loader, prefetch
+from zimt.webui import downloads, exec_api, loader, prefetch
 from zimt.webui.exec_api import ExecBody
 from zimt.webui.state import CANCEL_EVENTS, Job, STATE
 
@@ -37,11 +37,13 @@ class StateCase(unittest.IsolatedAsyncioTestCase):
         self._loading_model = STATE.loading_model
         self._jobs = dict(STATE.jobs)
         self._cancel_events = dict(CANCEL_EVENTS)
+        self._active_job_id = downloads._active_job_id
         STATE.pipe = None
         STATE.g = None
         STATE.loading_model = None
         STATE.jobs.clear()
         CANCEL_EVENTS.clear()
+        downloads._active_job_id = None
 
     def tearDown(self) -> None:
         STATE.pipe = self._pipe
@@ -51,6 +53,7 @@ class StateCase(unittest.IsolatedAsyncioTestCase):
         STATE.jobs.update(self._jobs)
         CANCEL_EVENTS.clear()
         CANCEL_EVENTS.update(self._cancel_events)
+        downloads._active_job_id = self._active_job_id
 
 
 class LoaderTests(StateCase):
@@ -202,6 +205,75 @@ class DownloadIdentityTests(StateCase):
         self.assertEqual(payload["kind"], "download")
         self.assertEqual(payload["target_kind"], "base")
         self.assertEqual(payload["model"], "shared")
+
+
+class DownloadOwnershipTests(StateCase):
+    async def test_model_load_waits_for_active_prefetch_download_owner(self) -> None:
+        # regression: a model load previously overwrote the active prefetch
+        # progress owner, then cleared the slot while the prefetch still ran.
+        loop = asyncio.get_running_loop()
+        prefetch_started = asyncio.Event()
+        release_prefetch = threading.Event()
+        observed: dict[str, str | None] = {}
+
+        def blocked_snapshot(_repo_id: str) -> None:
+            loop.call_soon_threadsafe(prefetch_started.set)
+            if not release_prefetch.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release blocked prefetch")
+
+        def succeed(name: str) -> None:
+            current = downloads.current_download()
+            observed["during_load_owner"] = current["id"] if current is not None else None
+            STATE.pipe = object()
+            STATE.g = _config_for(name)
+
+        with (
+            patch.object(prefetch, "_snapshot_download_sync", blocked_snapshot),
+            patch.object(loader, "_do_load_sync", succeed),
+        ):
+            prefetch_job_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            try:
+                await asyncio.wait_for(prefetch_started.wait(), timeout=1)
+                current = downloads.current_download()
+                self.assertIsNotNone(current)
+                self.assertEqual(current["id"], prefetch_job_id)
+
+                await loader.load_model("z-image-turbo")
+                current = downloads.current_download()
+                observed["after_load_owner"] = current["id"] if current is not None else None
+
+                self.assertEqual(
+                    observed,
+                    {
+                        "during_load_owner": prefetch_job_id,
+                        "after_load_owner": prefetch_job_id,
+                    },
+                )
+            finally:
+                release_prefetch.set()
+                # Drain the released prefetch task before returning so
+                # module-global state (_active_job_id) is restored by its
+                # finally block before the next test begins.
+                for _ in range(50):
+                    job = STATE.jobs.get(prefetch_job_id)
+                    if job is not None and job.status in {"done", "error"}:
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    raise RuntimeError("prefetch task did not finish after release")
+
+
+class DownloadOwnershipApiTests(StateCase):
+    def test_set_active_download_is_idempotent_for_same_owner(self) -> None:
+        jid = "job-a"
+        other = "job-b"
+        self.assertTrue(downloads.set_active_download(jid))
+        self.assertTrue(downloads.set_active_download(jid))  # idempotent
+        self.assertFalse(downloads.set_active_download(other))  # different owner refused
+        downloads.clear_active_download(other)  # non-owner clear is a no-op
+        self.assertEqual(downloads._active_job_id, jid)
+        downloads.clear_active_download(jid)  # owner clears
+        self.assertIsNone(downloads._active_job_id)
 
 
 class RegistryTests(unittest.TestCase):

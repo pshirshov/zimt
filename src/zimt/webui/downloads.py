@@ -8,15 +8,31 @@ mirrors each ``__init__`` / ``update`` / ``close`` into that Job's
 ``download_*`` fields and broadcasts a job update over the WebSocket.
 
 The hook is installed once at server startup via :func:`install`.
-Outside of an active download context (``set_active_download(None)``)
-the patched tqdm is a no-op pass-through to its base — diffusers,
-transformers etc. also use tqdm but we don't want to spam the UI with
-their bars.
+Outside of an active download context the patched tqdm is a no-op
+pass-through to its base — diffusers, transformers etc. also use tqdm
+but we don't want to spam the UI with their bars.
+
+Ownership invariant: at most one HuggingFace download owns the progress
+slot at a time. Ownership is acquired with :func:`set_active_download`
+(returns ``True`` on success) and released by the *same* job id via
+:func:`clear_active_download`. A concurrent download that cannot acquire
+the slot proceeds normally but its tqdm progress is not broadcast.
+
+Per-bar ownership: callers must wrap their executor invocations in
+:func:`download_context` (a context manager that sets a ``contextvars``
+var to the job id). Python copies the current context into
+``loop.run_in_executor`` worker threads, so ``ProgressTqdm`` bars
+created inside the worker capture the job id at construction time and
+silently drop all events if that id no longer matches the current slot
+owner. This prevents misattribution: a non-owning concurrent download's
+bars are no-ops rather than corrupting the owner's progress fields.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import sys
 import threading
 from dataclasses import asdict
@@ -36,17 +52,58 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 _active_lock = threading.Lock()
 _active_job_id: Optional[str] = None
 
+# Per-bar identity: set by download_context() before run_in_executor so
+# the ContextVar propagates into the worker thread. Each ProgressTqdm bar
+# captures the value at construction time and gates all events on it.
+_owner_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "zimt_download_owner", default=None
+)
 
-def set_active_download(job_id: Optional[str]) -> None:
-    """Mark which Job receives the next tqdm events. Pass ``None`` to
-    detach (idiomatic at the end of :func:`zimt.webui.loader.load_model`).
 
-    Caller is responsible for creating / finalizing the Job — this only
-    routes intermediate progress.
+@contextlib.contextmanager
+def download_context(job_id: str):
+    """Mark the current asyncio/thread context as belonging to *job_id*.
+
+    Propagates through ``loop.run_in_executor`` (Python copies the
+    current ``contextvars.Context`` into the worker). tqdm bars created
+    inside this context capture *job_id* and only emit if it matches
+    the current slot owner. See :func:`set_active_download`.
+    """
+    token = _owner_var.set(job_id)
+    try:
+        yield
+    finally:
+        _owner_var.reset(token)
+
+
+def set_active_download(job_id: str) -> bool:
+    """Attempt to claim the progress slot for *job_id*.
+
+    Returns ``True`` if the slot was free (or already owned by this job)
+    and ownership is now held. Returns ``False`` if another job owns the
+    slot; the caller may continue its work but tqdm progress will not be
+    broadcast.
+
+    Release ownership with :func:`clear_active_download`.
     """
     global _active_job_id
     with _active_lock:
-        _active_job_id = job_id
+        if _active_job_id is None or _active_job_id == job_id:
+            _active_job_id = job_id
+            return True
+        return False
+
+
+def clear_active_download(job_id: str) -> None:
+    """Release the progress slot — but only if *job_id* is the current owner.
+
+    Owner-scoped: a job that never acquired the slot (set_active_download
+    returned False) will not accidentally clear another job's ownership.
+    """
+    global _active_job_id
+    with _active_lock:
+        if _active_job_id == job_id:
+            _active_job_id = None
 
 
 def install(loop: asyncio.AbstractEventLoop) -> None:
@@ -80,6 +137,9 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
         _zimt_patched = True
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
+            # Capture the owning job id before super().__init__ in case
+            # the base ever calls overridden methods during construction.
+            self._zimt_owner = _owner_var.get()
             super().__init__(*args, **kwargs)
             self._emit()
 
@@ -94,16 +154,17 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
             # finished" even when total is unknown.
             with _active_lock:
                 jid = _active_job_id
-            if jid is not None:
-                job = STATE.jobs.get(jid)
-                if job is not None and job.kind == "download":
-                    job.download_files_done += 1
-                    _schedule_emit(job)
+            if jid is None or jid != self._zimt_owner:
+                return
+            job = STATE.jobs.get(jid)
+            if job is not None and job.kind == "download":
+                job.download_files_done += 1
+                _schedule_emit(job)
 
         def _emit(self) -> None:
             with _active_lock:
                 jid = _active_job_id
-            if jid is None:
+            if jid is None or jid != getattr(self, "_zimt_owner", None):
                 return
             job = STATE.jobs.get(jid)
             if job is None or job.kind != "download":

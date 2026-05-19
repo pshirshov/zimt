@@ -16,7 +16,7 @@ from datetime import datetime
 
 from ..generate import GenConfig, load_spec, unload
 from ..models.registry import MODELS
-from .downloads import set_active_download
+from .downloads import clear_active_download, download_context, set_active_download
 from .state import EXECUTOR, Job, PIPE_LOCK, STATE
 from .ws import broadcast, emit_job, emit_log, emit_state
 
@@ -79,8 +79,10 @@ async def load_model(name: str) -> None:
     STATE.loading_model = name
     await emit_job(job)
     await emit_state()
-    set_active_download(job.id)
     try:
+        owns_progress = set_active_download(job.id)
+        if not owns_progress:
+            await emit_log(f"download progress slot busy; {name} load progress will not be broadcast")
         logged_wait = False
         while _has_active_generation_jobs():
             if not logged_wait:
@@ -98,7 +100,8 @@ async def load_model(name: str) -> None:
             await broadcast({"type": "model_loading", "model": name})
             loop = asyncio.get_running_loop()
             try:
-                await loop.run_in_executor(EXECUTOR, _do_load_sync, name)
+                with download_context(job.id):
+                    await loop.run_in_executor(EXECUTOR, _do_load_sync, name)
             except Exception as e:
                 STATE.pipe = None
                 STATE.g = None
@@ -115,7 +118,7 @@ async def load_model(name: str) -> None:
         await emit_state()
         await broadcast({"type": "model_loaded", "model": name})
     finally:
-        set_active_download(None)
+        clear_active_download(job.id)
         if STATE.loading_model == name:
             STATE.loading_model = None
             await emit_state()

@@ -24,7 +24,7 @@ from typing import Any
 
 from ..models.loras import LORAS
 from ..models.registry import MODELS
-from .downloads import set_active_download
+from .downloads import clear_active_download, download_context, set_active_download
 from .state import Job, STATE
 from .ws import broadcast, emit_job, emit_log
 
@@ -74,12 +74,15 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
         async with _PREFETCH_LOCK:
             job.status = "running"
             await emit_job(job)
-            set_active_download(job.id)
             try:
+                owns_progress = set_active_download(job.id)
+                if not owns_progress:
+                    await emit_log(f"download progress slot busy; prefetch of {name} progress will not be broadcast")
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(
-                    _PREFETCH_EXECUTOR, _snapshot_download_sync, spec.repo_id,
-                )
+                with download_context(job.id):
+                    await loop.run_in_executor(
+                        _PREFETCH_EXECUTOR, _snapshot_download_sync, spec.repo_id,
+                    )
                 job.status = "done"
                 job.ts_done = datetime.now().timestamp()
                 await emit_job(job)
@@ -94,7 +97,7 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
                 await emit_job(job)
                 await emit_log(f"prefetch failed for {name}: {e!r}", "error")
             finally:
-                set_active_download(None)
+                clear_active_download(job.id)
 
     asyncio.create_task(_run())
     return job.id

@@ -20,6 +20,9 @@ dependencies = [
   "safetensors",
   "fastapi",
   "uvicorn",
+  # Required backend for the LoRA stacking API in modern diffusers
+  # (load_lora_weights + set_adapters with multi-adapter weights).
+  "peft",
   # Prompt weighting for SDXL — optional at runtime; the import is wrapped.
   "compel",
 ]

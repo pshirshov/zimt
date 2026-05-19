@@ -129,6 +129,10 @@ let
       tokenizers
       pillow
       numpy
+      # peft is the backend diffusers' load_lora_weights / set_adapters
+      # delegate to in v0.27+. Without it, any /lora invocation blows up
+      # with "PEFT backend is required for this method.".
+      peft
     ]
     ++ optional (resolvedTorch != null) resolvedTorch
     ++ optional (resolvedTorchvision != null) resolvedTorchvision

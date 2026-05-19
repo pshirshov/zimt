@@ -193,7 +193,7 @@ _HELP_LINES = [
     "  /sampler <name>        switch scheduler (model-specific)",
     "  /clip_skip N           SDXL only — skip top N CLIP layers (0=off)",
     "  /model <name>          load a model",
-    "  /lora …                add/remove LoRAs (name, name:0.8, -name, -)",
+    "  /lora <name>           add/update one LoRA (name, name:0.8, -name, -); repeat for stacking",
     "  /tokenize <text>       show per-encoder token analysis",
     "multiple commands may be combined on one line, e.g.",
     "  /model pony-v6-xl /cfg 5 /steps 25 cute anime girl",
@@ -261,14 +261,13 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
             if not await _need_pipe("/lora", log):
                 continue
             assert STATE.g is not None
-            tokens = (args[0].split() if args and args[0] else [])
-            if not tokens:
+            if not args:
                 msg = f"active loras: {format_stack(STATE.g.lora_stack)}"
                 log.append(msg)
                 await emit_log(msg)
                 continue
             try:
-                messages = apply_lora_args(STATE.g.lora_stack, tokens, STATE.g.spec)
+                messages = apply_lora_args(STATE.g.lora_stack, [args[0]], STATE.g.spec)
             except LoraCmdError as e:
                 log.append(f"/lora: {e}")
                 await emit_log(f"/lora: {e}", level="error")

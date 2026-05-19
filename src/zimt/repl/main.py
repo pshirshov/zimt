@@ -31,7 +31,7 @@ def _help() -> None:
     print("  /sampler <name>      switch scheduler (model-specific; tab-complete)")
     print("  /clip_skip N         SDXL only — skip top N CLIP layers (0=off, 2=Pony default)")
     print("  /model [name]        switch model; bare lists available")
-    print("  /lora ...            add/remove LoRAs: name, name:0.8, -name, -")
+    print("  /lora <name>         add/update one LoRA: name, name:0.8, -name, -; repeat for stacking")
     print("  /tokenize <text>     show per-encoder tokenization heuristics")
     print("  /help                show this")
     print("  /quit | /exit | ^D   leave")
@@ -50,6 +50,7 @@ def _print_state(g: GenConfig) -> None:
     print(f"  negprompt={g.negative_prompt!r}")
     if g.spec.score_tags:
         print(f"  auto-prefix={g.spec.score_tags!r}")
+    print(f"  loras={format_stack(g.lora_stack)}")
 
 
 def _list_models(current: str) -> None:
@@ -175,12 +176,11 @@ def repl_main() -> int:
             elif cmd == "/lora":
                 if not _require_pipe(pipe) or g is None:
                     continue
-                tokens = (args[0].split() if args and args[0] else [])
-                if not tokens:
+                if not args:
                     print(f"active loras: {format_stack(g.lora_stack)}")
                     continue
                 try:
-                    for ln in apply_lora_args(g.lora_stack, tokens, g.spec):
+                    for ln in apply_lora_args(g.lora_stack, [args[0]], g.spec):
                         print(ln)
                 except LoraCmdError as e:
                     print(f"/lora: {e}")

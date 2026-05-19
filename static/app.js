@@ -168,10 +168,11 @@ function fmtState(s) {
     `negprompt: ${JSON.stringify(st.negative_prompt ?? "")}`,
   ];
   if (st.score_tags) lines.push(`auto-prefix: ${JSON.stringify(st.score_tags)}`);
-  if (st.lora_stack && st.lora_stack.length) {
-    const txt = st.lora_stack.map(e => `${e.name}:${e.weight}`).join(", ");
-    lines.push(`loras:  ${txt}`);
-  }
+  const stack = st.lora_stack || [];
+  const loraTxt = stack.length
+    ? stack.map(e => `${e.name}:${e.weight}`).join(", ")
+    : "(none)";
+  lines.push(`loras: ${loraTxt}`);
   return lines.join("\n");
 }
 
@@ -546,6 +547,7 @@ const HL_CMDS = {
   "/help": {n: 0}, "/?": {n: 0}, "/quit": {n: 0}, "/exit": {n: 0}, "/q": {n: 0},
   "/raw": {n: 0},
   "/model": {n: 1, cls: "hl-model"},
+  "/lora": {n: 1, cls: "hl-lora"},
   "/sampler": {n: 1, cls: "hl-sampler"},
   "/cfg": {n: 1, cls: "hl-num"},
   "/steps": {n: 1, cls: "hl-num"},

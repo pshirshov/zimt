@@ -80,12 +80,12 @@ Useful CLI flags:
 ## REPL / web command surface
 
 Multi-command lines compose left-to-right; greedy commands (`/negprompt`,
-`/tokenize`, `/many`, `/lora`) stop at the next `/cmd`:
+`/tokenize`, `/many`) stop at the next `/cmd`:
 
 ```
 /model pony-v6-xl /cfg 5 /steps 25 /res 1216x832 cute anime girl
 /many 8 /seed 42 a forest
-/lora pixel-art-xl:0.8 ascii-art:0.5 a knight at sunset
+/lora pixel-art-xl:0.8 /lora ascii-art:0.5 a knight at sunset
 /tokenize 西安大雁塔 ⚡️ supercalifragilistic
 ```
 
@@ -101,7 +101,7 @@ Multi-command lines compose left-to-right; greedy commands (`/negprompt`,
 | `/clip_skip N` | SDXL only — skip top N CLIP layers (0=off; Pony was trained with 2) |
 | `/negprompt …` / `/negprompt -` | set / clear negative prompt |
 | `/model <name>` | swap the loaded model (no-op if already loaded) |
-| `/lora <name>[:w]` …  | stack LoRAs on top of the active base (A1111-style). `-<name>` removes one, bare `-` clears. Bare `/lora` lists active. |
+| `/lora <name>[:w]` | add or update one LoRA (A1111-style stacking by repetition). `-<name>` removes one, bare `-` clears, bare `/lora` lists active. |
 | `/tokenize <text>` | per-encoder token analysis + budget headroom |
 | `/help` / `/quit` | help / leave |
 

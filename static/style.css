@@ -144,6 +144,7 @@
   /* Syntax-highlight token colours. Kept loud — this is a power-user input. */
   .hl-cmd { color: var(--accent); font-weight: 600; }
   .hl-model { color: #7ad17a; }
+  .hl-lora { color: #d17ac4; }
   .hl-sampler { color: #b5d17a; }
   .hl-num { color: #e6c66a; }
   .hl-flag { color: var(--accent); }

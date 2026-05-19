@@ -85,14 +85,6 @@ def _resolution_options(tokens: list[str], text: str) -> list[str]:
     return [r for r in sorted(seen) if r.startswith(text)]
 
 
-def _most_recent_cmd(tokens: list[str]) -> str | None:
-    """Return the most recent ``/cmd`` token in ``tokens``, if any."""
-    for tok in reversed(tokens):
-        if tok.startswith("/") and tok in COMMANDS:
-            return tok
-    return None
-
-
 def _completion_options(line: str, begidx: int, text: str) -> list[str]:
     prefix = line[:begidx]
     tokens = prefix.split()
@@ -106,7 +98,7 @@ def _completion_options(line: str, begidx: int, text: str) -> list[str]:
         return _sampler_options(tokens, text)
     if prev == "/res":
         return _resolution_options(tokens, text)
-    if _most_recent_cmd(tokens) == "/lora":
+    if prev == "/lora":
         return _lora_options(tokens, text)
     return []
 

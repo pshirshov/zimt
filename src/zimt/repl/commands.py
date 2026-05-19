@@ -26,7 +26,7 @@ COMMAND_ARITY: dict[str, Arity] = {
     "/many": "MANY",
     "/negprompt": "GREEDY",
     "/tokenize": "GREEDY",
-    "/lora": "GREEDY",
+    "/lora": 1,
 }
 
 KNOWN_COMMANDS: frozenset[str] = frozenset(COMMAND_ARITY)

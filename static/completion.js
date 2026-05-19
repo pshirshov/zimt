@@ -65,16 +65,10 @@
         .map((m) => ({ label: m.name, desc: m.description }));
     }
 
-    // /lora is greedy — every subsequent token until the next /cmd is a
-    // LoRA-name argument. Walk back to find the most-recent /cmd; if it's
-    // /lora, complete LoRA names filtered by compatibility with the
+    // /lora takes exactly one LoRA-name argument. Complete only the token
+    // immediately following /lora, filtered by compatibility with the
     // active base model (or the most recent /model arg in this line).
-    const knownCmds = new Set(COMMANDS);
-    let mostRecentCmd = null;
-    for (let i = before.length - 1; i >= 0; i -= 1) {
-      if (knownCmds.has(before[i])) { mostRecentCmd = before[i]; break; }
-    }
-    if (mostRecentCmd === "/lora") {
+    if (prev === "/lora") {
       const loras = appState?.loras ?? [];
       const base = modelForContext(before, appState);
       const baseTags = new Set(base?.compatibility_tags ?? []);

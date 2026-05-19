@@ -26,7 +26,7 @@ from ..buckets import parse_res
 from ..models.registry import MODELS
 from ..repl.commands import parse_commands
 from .jobs import run_job
-from .loader import load_model
+from .loader import ModelLoadError, load_model
 from .state import CANCEL_EVENTS, Job, STATE
 from .ws import emit_job, emit_log, emit_state
 
@@ -224,7 +224,13 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
                 continue
             log.append(f"loading model: {name}")
             await emit_log(f"loading model: {name}")
-            await load_model(name)
+            try:
+                await load_model(name)
+            except ModelLoadError as e:
+                msg = f"/model: {e}"
+                log.append(msg)
+                await emit_log(msg, level="error")
+                continue
         elif cmd == "/seed":
             try:
                 next_seed = int(args[0])

@@ -33,6 +33,10 @@ CANCEL_EVENTS: dict[str, threading.Event] = {}
 @dataclass
 class Job:
     id: str
+    # Discriminator for the queue UI. ``generate`` jobs follow the
+    # ``step / total_steps`` progress shape; ``download`` jobs use
+    # ``download_*`` and represent a model fetch from HuggingFace.
+    kind: str = "generate"
     status: str = "queued"  # queued | running | done | error | canceled
     raw_prompt: str = ""
     full_prompt: str = ""
@@ -43,9 +47,17 @@ class Job:
     error: str | None = None
     ts_queued: float = field(default_factory=lambda: datetime.now().timestamp())
     ts_done: float | None = None
-    # Progress: ``step`` is 1-based; 0 means not started yet.
+    # Generation progress: ``step`` is 1-based; 0 means not started yet.
     step: int = 0
     total_steps: int = 0
+    # Download progress: file currently being fetched + its byte counts.
+    # File-aggregate counts are best-effort — HF's tqdm doesn't expose how
+    # many files remain in a snapshot pull, so we count what we've seen
+    # close().
+    download_file: str = ""
+    download_n: int = 0
+    download_total: int = 0
+    download_files_done: int = 0
 
 
 @dataclass

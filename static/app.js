@@ -16,34 +16,108 @@ const LS = {
   setHistory: (xs) => localStorage.setItem("zimt.history", JSON.stringify(xs.slice(0, 50))),
 };
 
-// ---------- websocket ----------
-let ws = null, reconnectTimer = null;
+// ---------- websocket + RPC ----------
+// Connection lifecycle (state machine, heartbeat, backoff, time-jump,
+// defer-while-hidden, terminal state) lives in connection.js. We just
+// pipe messages out and surface state to the topbar pill + title.
+let conn = null;
+
+function wsRequest(method, params) {
+  if (!conn) return Promise.reject(new Error("not initialized"));
+  return conn.request(method, params || {});
+}
+
+function dispatchEvent(m) {
+  if (!m || typeof m !== "object") return;
+  if (m.type === "state") onStateUpdate(m.state);
+  else if (m.type === "job") onJob(m.job);
+  else if (m.type === "output_added") onOutputAdded(m.entry);
+  else if (m.type === "favorite_changed") onFavoriteChanged(m.entry);
+  else if (m.type === "outputs_cleared") refreshOutputs();
+  else if (m.type === "jobs_cleared") {
+    for (const id of m.ids) jobs.delete(id);
+    renderQueue();
+  }
+  else if (m.type === "gpu_stats") onGpuStats(m.stats);
+  else if (m.type === "log") appendLog(m.message, m.level);
+  else if (m.type === "model_loading") onModelLoading(m.model);
+  else if (m.type === "model_loaded")  onModelLoaded(m.model);
+  else if (m.type === "model_error")   onModelError(m.error);
+}
+
+function deriveWidget(s) {
+  // V2: state is *derived* from manager stats so it can't drift.
+  // V10: never lie — terminal/deferred/stale each get their own label.
+  if (s.isTerminal) return { label: "stopped", cls: "err",
+    title: `connection stopped after ${s.attempt} attempts (last close: ${s.lastCloseCode} ${s.lastCloseReason})` };
+  if (s.deferredOnVisible) return { label: "paused (hidden)", cls: "loading",
+    title: "reconnect deferred until tab is visible" };
+  switch (s.state) {
+    case "ALIVE":
+      return { label: "connected", cls: "ok",
+        title: `connected · pending pings ${s.pendingPings}` };
+    case "STALE":
+      return { label: "stalled", cls: "loading",
+        title: "no pong from server — verifying" };
+    case "NEW":
+      return { label: "connecting…", cls: "loading", title: "opening websocket" };
+    case "DEAD":
+    default: {
+      const next = s.nextReconnectInMs;
+      const inS = next == null ? null : Math.max(0, Math.round(next / 1000));
+      const label = inS == null
+        ? "disconnected"
+        : `reconnecting in ${inS}s (${s.attempt}/${s.maxAttempts})`;
+      return { label, cls: "err",
+        title: `last close: ${s.lastCloseCode || "?"} ${s.lastCloseReason || ""}` };
+    }
+  }
+}
+
+function renderConnectionPill(s) {
+  const w = deriveWidget(s);
+  const el = $("ws-state");
+  el.textContent = w.label;
+  el.className = "pill " + w.cls;
+  el.title = w.title;
+  el.setAttribute("aria-label", `connection: ${w.label}`);
+  // V7: mirror state in the document title so hidden tabs surface it.
+  const base = "zimt";
+  if (s.state === "ALIVE" && !s.isTerminal) {
+    document.title = base;
+  } else if (s.isTerminal) {
+    document.title = `[stopped] ${base}`;
+  } else if (s.state === "STALE") {
+    document.title = `[stalled] ${base}`;
+  } else {
+    document.title = `[offline] ${base}`;
+  }
+}
+
+// rAF-throttled re-render so the countdown text ticks smoothly without
+// burning the loop. We re-derive from the last stats snapshot each
+// frame; the manager pushes a fresh snapshot whenever state changes.
+let _lastStats = null;
+let _renderScheduled = false;
+function scheduleRender() {
+  if (_renderScheduled) return;
+  _renderScheduled = true;
+  requestAnimationFrame(() => {
+    _renderScheduled = false;
+    if (_lastStats) renderConnectionPill(_lastStats);
+  });
+}
+// Also drive a 1Hz tick so the countdown moves while the state itself
+// is steady (DEAD with reconnect pending).
+setInterval(() => { if (_lastStats) scheduleRender(); }, 1000);
+
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
-  ws.onopen = () => { $("ws-state").textContent = "connected"; $("ws-state").className = "pill ok"; };
-  ws.onclose = () => {
-    $("ws-state").textContent = "disconnected"; $("ws-state").className = "pill err";
-    reconnectTimer = setTimeout(connectWs, 1500);
-  };
-  ws.onerror = () => ws.close();
-  ws.onmessage = (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.type === "state") onStateUpdate(m.state);
-    else if (m.type === "job") onJob(m.job);
-    else if (m.type === "output_added") onOutputAdded(m.entry);
-    else if (m.type === "favorite_changed") onFavoriteChanged(m.entry);
-    else if (m.type === "outputs_cleared") refreshOutputs();
-    else if (m.type === "jobs_cleared") {
-      for (const id of m.ids) jobs.delete(id);
-      renderQueue();
-    }
-    else if (m.type === "gpu_stats") onGpuStats(m.stats);
-    else if (m.type === "log") appendLog(m.message, m.level);
-    else if (m.type === "model_loading") onModelLoading(m.model);
-    else if (m.type === "model_loaded")  onModelLoaded(m.model);
-    else if (m.type === "model_error")   onModelError(m.error);
-  };
+  conn = new ZimtConnectionManager({
+    url: `${proto}//${location.host}/ws`,
+    onMessage: dispatchEvent,
+    onStateChange: (s) => { _lastStats = s; scheduleRender(); },
+  });
 }
 
 // ---------- log line (rolling) ----------
@@ -123,41 +197,76 @@ function onJob(j) {
   renderQueue();
 }
 
+function fmtBytes(n) {
+  if (!n || n <= 0) return "?";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 function renderQueue() {
   const root = $("queue-list");
   root.innerHTML = "";
   const arr = Array.from(jobs.values()).reverse();
   for (const j of arr) {
     const li = document.createElement("li");
-    li.className = "queue-item status-" + j.status;
+    li.className = "queue-item status-" + j.status + " kind-" + (j.kind || "generate");
     const status = document.createElement("span"); status.className = "qstatus";
-    status.textContent = j.status;
-    const prompt = document.createElement("span"); prompt.className = "qprompt";
-    prompt.textContent = (j.full_prompt || j.raw_prompt || "").slice(0, 200);
-    prompt.title = j.full_prompt || j.raw_prompt || "";
-    const seed = document.createElement("span"); seed.className = "qseed";
-    seed.textContent = `seed=${j.seed}`;
-    li.append(status, prompt, seed);
-    if (j.status === "running" && j.total_steps > 0) {
-      const bar = document.createElement("div");
-      bar.className = "qprogress";
-      const pct = Math.min(100, Math.round(100 * j.step / j.total_steps));
-      bar.title = `${j.step}/${j.total_steps}`;
-      const fill = document.createElement("div");
-      fill.style.width = pct + "%";
-      bar.appendChild(fill);
-      li.appendChild(bar);
-    }
-    if (j.status === "queued" || j.status === "running") {
-      const cancel = document.createElement("button");
-      cancel.className = "cancel-btn"; cancel.textContent = "✕";
-      cancel.title = "cancel job";
-      cancel.onclick = async () => {
-        cancel.disabled = true;
-        try { await apiPost(`/api/jobs/${encodeURIComponent(j.id)}/cancel`, {}); }
-        catch (e) { appendLog(`cancel: ${e.message}`, "error"); cancel.disabled = false; }
-      };
-      li.appendChild(cancel);
+    status.textContent = j.kind === "download" ? "downloading" : j.status;
+    li.appendChild(status);
+    if (j.kind === "download") {
+      const label = document.createElement("span"); label.className = "qprompt";
+      const file = j.download_file || "(starting)";
+      const bytes = j.download_total
+        ? `${fmtBytes(j.download_n)} / ${fmtBytes(j.download_total)}`
+        : fmtBytes(j.download_n);
+      label.textContent = `${j.model}  ·  ${file}  ·  ${bytes}`;
+      label.title = label.textContent;
+      li.appendChild(label);
+      if (j.download_files_done > 0) {
+        const meta = document.createElement("span"); meta.className = "qseed";
+        meta.textContent = `files done: ${j.download_files_done}`;
+        li.appendChild(meta);
+      }
+      if (j.status === "running" && j.download_total > 0) {
+        const bar = document.createElement("div");
+        bar.className = "qprogress";
+        const pct = Math.min(100, Math.round(100 * j.download_n / j.download_total));
+        bar.title = `${pct}%`;
+        const fill = document.createElement("div");
+        fill.style.width = pct + "%";
+        bar.appendChild(fill);
+        li.appendChild(bar);
+      }
+    } else {
+      const prompt = document.createElement("span"); prompt.className = "qprompt";
+      prompt.textContent = (j.full_prompt || j.raw_prompt || "").slice(0, 200);
+      prompt.title = j.full_prompt || j.raw_prompt || "";
+      const seed = document.createElement("span"); seed.className = "qseed";
+      seed.textContent = `seed=${j.seed}`;
+      li.append(prompt, seed);
+      if (j.status === "running" && j.total_steps > 0) {
+        const bar = document.createElement("div");
+        bar.className = "qprogress";
+        const pct = Math.min(100, Math.round(100 * j.step / j.total_steps));
+        bar.title = `${j.step}/${j.total_steps}`;
+        const fill = document.createElement("div");
+        fill.style.width = pct + "%";
+        bar.appendChild(fill);
+        li.appendChild(bar);
+      }
+      if (j.status === "queued" || j.status === "running") {
+        const cancel = document.createElement("button");
+        cancel.className = "cancel-btn"; cancel.textContent = "✕";
+        cancel.title = "cancel job";
+        cancel.onclick = async () => {
+          cancel.disabled = true;
+          try { await wsRequest("job_cancel", { id: j.id }); }
+          catch (e) { appendLog(`cancel: ${e.message}`, "error"); cancel.disabled = false; }
+        };
+        li.appendChild(cancel);
+      }
     }
     if (j.status === "error" && j.error) {
       const details = document.createElement("button");
@@ -238,13 +347,11 @@ function renderThumbs() {
   $("load-more").style.display = hasMore ? "" : "none";
 }
 async function toggleFavorite(entry) {
-  try { await apiPost(`/api/outputs/${encodeURIComponent(entry.name)}/favorite`, { favorite: !entry.fav }); }
+  try { await wsRequest("output_favorite", { name: entry.name, favorite: !entry.fav }); }
   catch (e) { appendLog(`favorite: ${e.message}`, "error"); }
 }
 async function loadOutputs(tab, page) {
-  const r = await fetch(`/api/outputs?tab=${tab}&page=${page}&per_page=60`);
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  return r.json();
+  return wsRequest("outputs_list", { tab, page, per_page: 60 });
 }
 async function refreshOutputs() {
   try {
@@ -277,20 +384,20 @@ $("load-more").onclick = loadMore;
 $("btn-cleanup-outputs").onclick = async () => {
   if (!confirm("Delete every non-favorite output? Favorites are kept.")) return;
   try {
-    const r = await apiPost("/api/outputs/cleanup", {});
+    const r = await wsRequest("outputs_cleanup");
     appendLog(`cleaned ${r.deleted} files`);
     await refreshOutputs();
   } catch (e) { appendLog(`cleanup: ${e.message}`, "error"); }
 };
 $("btn-cancel-all").onclick = async () => {
   try {
-    const r = await apiPost("/api/jobs/cancel-all", {});
+    const r = await wsRequest("jobs_cancel_all");
     appendLog(`canceled ${r.canceled} jobs`);
   } catch (e) { appendLog(`cancel-all: ${e.message}`, "error"); }
 };
 $("btn-clear-completed").onclick = async () => {
   try {
-    const r = await apiPost("/api/jobs/clear-completed", {});
+    const r = await wsRequest("jobs_clear_completed");
     appendLog(`cleared ${r.cleared} completed jobs`);
   } catch (e) { appendLog(`clear-completed: ${e.message}`, "error"); }
 };
@@ -766,7 +873,7 @@ async function submit({ keepValue = false } = {}) {
     hideSuggest();
     autoResize();
   }
-  try { await apiPost("/api/exec", { line }); }
+  try { await wsRequest("exec", { line }); }
   catch (e) {
     appendLog(`exec: ${e.message}`, "error");
     if (!keepValue) { input.value = saved; autoResize(); }
@@ -798,14 +905,6 @@ function setupSplitter() {
     dragging = false; document.body.style.cursor = ""; document.body.style.userSelect = "";
     localStorage.setItem("zimt.right-w", String(right.offsetWidth));
   });
-}
-
-// ---------- HTTP helper ----------
-async function apiPost(path, body) {
-  const r = await fetch(path, { method: "POST",
-    headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  return r.json();
 }
 
 // ---------- init ----------
@@ -860,10 +959,9 @@ async function init() {
   autoResize();
   renderHighlight();
   connectWs();
-  try {
-    const s = await (await fetch("/api/state")).json();
-    onStateUpdate(s);
-    await refreshOutputs();
-  } catch (e) { appendLog(`init: ${e.message}`, "error"); }
+  // State arrives as a "state" event on WS connect (server hello), so
+  // no explicit fetch is needed. Outputs do still need a one-shot pull.
+  try { await refreshOutputs(); }
+  catch (e) { appendLog(`init: ${e.message}`, "error"); }
 }
 init();

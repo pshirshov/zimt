@@ -117,6 +117,10 @@ let
     # Always-on common deps.
     [ fastapi
       uvicorn
+      # uvicorn needs a ws backend (websockets or wsproto) to serve the
+      # WebSocket upgrade — otherwise it 404s every WS request. We
+      # carry the whole UI over WS, so this is load-bearing.
+      websockets
       pydantic
       huggingface-hub
       safetensors

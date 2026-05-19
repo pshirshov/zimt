@@ -5,6 +5,7 @@ import base64
 import os
 import threading
 import unittest
+from dataclasses import asdict
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -12,7 +13,7 @@ from fastapi import HTTPException
 import zimt.webui.app as web_app
 from zimt.generate import GenConfig
 from zimt.models.registry import MODELS
-from zimt.webui import exec_api, loader
+from zimt.webui import exec_api, loader, prefetch
 from zimt.webui.exec_api import ExecBody
 from zimt.webui.state import CANCEL_EVENTS, Job, STATE
 
@@ -160,6 +161,47 @@ class ExecValidationTests(StateCase):
 
         self.assertEqual(load_calls, ["pony-v6-xl"])
         self.assertEqual(STATE.g.spec.name if STATE.g else None, "pony-v6-xl")
+
+
+class DownloadIdentityTests(StateCase):
+    async def test_prefetch_job_exposes_download_target_kind(self) -> None:
+        # regression: model-tab downloads previously exposed only kind="download"
+        # plus model name, so same-named base and LoRA targets shared UI state.
+        with patch.object(prefetch, "_snapshot_download_sync", lambda _repo_id: None):
+            job_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            await asyncio.sleep(0)
+
+        job = STATE.jobs[job_id]
+        self.assertEqual(job.kind, "download")
+        self.assertEqual(job.target_kind, "lora")
+        self.assertEqual(job.model, "pixel-art-xl")
+
+    async def test_model_load_download_job_exposes_base_target_kind(self) -> None:
+        load_calls: list[str] = []
+
+        def succeed(name: str) -> None:
+            load_calls.append(name)
+            STATE.pipe = object()
+            STATE.g = _config_for(name)
+
+        with patch.object(loader, "_do_load_sync", succeed):
+            await loader.load_model("z-image-turbo")
+
+        download_jobs = [
+            job for job in STATE.jobs.values()
+            if job.kind == "download" and job.model == "z-image-turbo"
+        ]
+        self.assertEqual(load_calls, ["z-image-turbo"])
+        self.assertEqual(len(download_jobs), 1)
+        self.assertEqual(download_jobs[0].target_kind, "base")
+
+    def test_job_serialization_preserves_target_kind_separate_from_queue_kind(self) -> None:
+        job = Job(id="job-1", kind="download", target_kind="base", model="shared")
+        payload = asdict(job)
+
+        self.assertEqual(payload["kind"], "download")
+        self.assertEqual(payload["target_kind"], "base")
+        self.assertEqual(payload["model"], "shared")
 
 
 class RegistryTests(unittest.TestCase):

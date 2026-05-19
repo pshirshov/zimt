@@ -71,6 +71,7 @@ async def load_model(name: str) -> None:
     job = Job(
         id=uuid.uuid4().hex,
         kind="download",
+        target_kind="base",
         status="running",
         model=name,
     )

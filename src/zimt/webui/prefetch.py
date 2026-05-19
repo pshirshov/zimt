@@ -63,6 +63,7 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
     job = Job(
         id=uuid.uuid4().hex,
         kind="download",
+        target_kind=kind,
         status="queued",
         model=name,
     )

@@ -1020,6 +1020,7 @@ function _downloadingByName(kind) {
   const out = new Map();
   for (const j of jobs.values()) {
     if (j.kind !== "download") continue;
+    if (j.target_kind !== kind) continue;
     if (j.status !== "queued" && j.status !== "running") continue;
     out.set(j.model, j);
   }

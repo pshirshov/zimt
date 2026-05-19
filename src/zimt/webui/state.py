@@ -38,6 +38,9 @@ class Job:
     # ``step / total_steps`` progress shape; ``download`` jobs use
     # ``download_*`` and represent a model fetch from HuggingFace.
     kind: str = "generate"
+    # Download target identity. Queue type stays ``kind == "download"``;
+    # this distinguishes same-named base-model and LoRA assets.
+    target_kind: str = ""
     status: str = "queued"  # queued | running | done | error | canceled
     raw_prompt: str = ""
     full_prompt: str = ""

@@ -15,53 +15,74 @@
   <div class="left">
     <div class="topbar">
       <h1>zimt</h1>
+      <div class="left-tabs" role="tablist" aria-label="left panel">
+        <button class="ltab active" data-ltab="inference" role="tab"
+                aria-selected="true">inference</button>
+        <button class="ltab" data-ltab="models" role="tab"
+                aria-selected="false">models</button>
+      </div>
       <span id="ws-state" class="pill">disconnected</span>
       <span id="model-state" class="pill">no model</span>
       <span id="gpu-stats" class="pill gpu-pill" title=""></span>
     </div>
 
-    <div class="prompt-bar">
-      <div class="prompt-row">
-        <div class="textarea-wrap">
-          <pre id="prompt-highlight" class="prompt-highlight" aria-hidden="true"></pre>
-          <textarea id="prompt-input" rows="1" autocomplete="off" autocapitalize="off"
-                    spellcheck="false" autofocus
-                    placeholder="prompt or /command — Enter submits, Shift+Enter submits + keeps text, Ctrl+Enter newline; popup open: Tab cycles, Enter accepts, Esc dismiss"></textarea>
-          <div id="suggest-popup" class="suggest-popup" role="listbox" aria-hidden="true"></div>
+    <div class="lpane lpane-inference" data-ltab="inference">
+      <div class="prompt-bar">
+        <div class="prompt-row">
+          <div class="textarea-wrap">
+            <pre id="prompt-highlight" class="prompt-highlight" aria-hidden="true"></pre>
+            <textarea id="prompt-input" rows="1" autocomplete="off" autocapitalize="off"
+                      spellcheck="false" autofocus
+                      placeholder="prompt or /command — Enter submits, Shift+Enter submits + keeps text, Ctrl+Enter newline; popup open: Tab cycles, Enter accepts, Esc dismiss"></textarea>
+            <div id="suggest-popup" class="suggest-popup" role="listbox" aria-hidden="true"></div>
+          </div>
+          <button id="btn-generate" class="gen-btn" title="generate (Enter)">gen</button>
         </div>
-        <button id="btn-generate" class="gen-btn" title="generate (Enter)">gen</button>
+        <div class="log-row">
+          <div id="log"></div>
+          <button id="btn-clear-log" class="section-btn"
+                  title="clear command output">clear</button>
+        </div>
       </div>
-      <div class="log-row">
-        <div id="log"></div>
-        <button id="btn-clear-log" class="section-btn"
-                title="clear command output">clear</button>
+
+      <div class="left-content">
+        <div class="section">
+          <h2><span>state</span></h2>
+          <pre id="state-text" class="state empty">no model loaded</pre>
+        </div>
+        <div class="section">
+          <h2>
+            <span>queue</span>
+            <span class="section-actions">
+              <button id="btn-cancel-all" class="section-btn"
+                      title="cancel every queued or running job">cancel all</button>
+              <button id="btn-clear-completed" class="section-btn"
+                      title="remove done / error / canceled jobs from the queue">clear</button>
+            </span>
+          </h2>
+          <ul class="queue-list" id="queue-list"></ul>
+        </div>
+        <div class="section">
+          <h2>
+            <span>recent prompts</span>
+            <button id="btn-clear-recent" class="section-btn"
+                    title="clear recent prompts (localStorage only)">clear</button>
+          </h2>
+          <ul class="recent-list" id="recent-list"></ul>
+        </div>
       </div>
     </div>
 
-    <div class="left-content">
-      <div class="section">
-        <h2><span>state</span></h2>
-        <pre id="state-text" class="state empty">no model loaded</pre>
-      </div>
-      <div class="section">
-        <h2>
-          <span>queue</span>
-          <span class="section-actions">
-            <button id="btn-cancel-all" class="section-btn"
-                    title="cancel every queued or running job">cancel all</button>
-            <button id="btn-clear-completed" class="section-btn"
-                    title="remove done / error / canceled jobs from the queue">clear</button>
-          </span>
-        </h2>
-        <ul class="queue-list" id="queue-list"></ul>
-      </div>
-      <div class="section">
-        <h2>
-          <span>recent prompts</span>
-          <button id="btn-clear-recent" class="section-btn"
-                  title="clear recent prompts (localStorage only)">clear</button>
-        </h2>
-        <ul class="recent-list" id="recent-list"></ul>
+    <div class="lpane lpane-models" data-ltab="models" hidden>
+      <div class="left-content">
+        <div class="section">
+          <h2>
+            <span>models</span>
+            <button id="btn-refresh-models" class="section-btn"
+                    title="rescan HF cache">refresh</button>
+          </h2>
+          <ul class="models-list" id="models-list"></ul>
+        </div>
       </div>
     </div>
   </div>

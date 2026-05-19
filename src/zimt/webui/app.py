@@ -42,7 +42,9 @@ from ..paths import FAV_DIR, OUT_DIR, STATIC_DIR, ensure_dirs
 from .downloads import install as install_download_hook
 from .exec_api import ExecBody, api_exec as exec_handler
 from .loader import ModelLoadError, load_model
+from .models_info import models_info
 from .outputs import list_outputs, read_png_meta, resolve_output, safe_name
+from .prefetch import PrefetchError, prefetch_model
 from .rpc import dispatch, method, rpc_error
 from .state import CANCEL_EVENTS, EXECUTOR, STATE
 from .ws import broadcast, emit_job
@@ -224,6 +226,23 @@ async def _rpc_model_switch(params: dict[str, Any]) -> dict[str, Any]:
     except ModelLoadError as e:
         raise rpc_error(str(e))
     return STATE.state_dict()
+
+
+@method("models_info")
+async def _rpc_models_info(_params: dict[str, Any]) -> dict[str, Any]:
+    return {"models": models_info()}
+
+
+@method("model_download")
+async def _rpc_model_download(params: dict[str, Any]) -> dict[str, Any]:
+    name = params.get("name")
+    if not isinstance(name, str):
+        raise rpc_error("missing model name")
+    try:
+        job_id = await prefetch_model(name)
+    except PrefetchError as e:
+        raise rpc_error(str(e))
+    return {"job_id": job_id}
 
 
 @method("exec")

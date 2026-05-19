@@ -64,6 +64,9 @@ def _pnginfo(g: GenConfig, full_prompt: str, raw_prompt: str, seed: int) -> PngI
     """
     info = PngInfo()
     info.add_text("model", g.spec.name)
+    if g.spec.repo_id:
+        info.add_text("repo_id", g.spec.repo_id)
+        info.add_text("repo_url", f"https://huggingface.co/{g.spec.repo_id}")
     info.add_text("raw_prompt", raw_prompt)
     info.add_text("prompt", full_prompt)
     info.add_text("negative_prompt", g.negative_prompt or "")

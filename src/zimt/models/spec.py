@@ -26,6 +26,13 @@ class ModelSpec:
     default_steps: int
     default_cfg: float
     default_negative: str
+    repo_id: str = ""
+    """HuggingFace repository id (``"owner/name"``).
+
+    Source of truth for the loader, install-status scan, and the
+    ``repo_id`` / ``repo_url`` PNG metadata fields. Empty string means
+    "no associated HF repo" (shouldn't happen for any registered model).
+    """
     family: Family = "sdxl"
     """Text-encoder architecture family.
 

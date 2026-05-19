@@ -43,6 +43,11 @@ function dispatchEvent(m) {
   else if (m.type === "model_loading") onModelLoading(m.model);
   else if (m.type === "model_loaded")  onModelLoaded(m.model);
   else if (m.type === "model_error")   onModelError(m.error);
+  else if (m.type === "model_prefetched") onModelPrefetched();
+}
+
+function onModelPrefetched() {
+  if (leftTab === "models") refreshModels();
 }
 
 function deriveWidget(s) {
@@ -164,6 +169,7 @@ function onStateUpdate(s) {
   const pre = $("state-text");
   pre.textContent = fmtState(s);
   pre.classList.toggle("empty", !s.loaded);
+  if (leftTab === "models" && modelsInfo.length) renderModels();
 }
 
 function onModelLoading(name) {
@@ -195,6 +201,8 @@ function onJob(j) {
     jobs.delete(oldest);
   }
   renderQueue();
+  // Mirror download-job progress into the models tab if it's visible.
+  if (leftTab === "models" && j.kind === "download") renderModels();
 }
 
 function fmtBytes(n) {
@@ -402,6 +410,7 @@ $("btn-clear-completed").onclick = async () => {
   } catch (e) { appendLog(`clear-completed: ${e.message}`, "error"); }
 };
 $("btn-clear-log").onclick = () => { $("log").innerHTML = ""; };
+$("btn-refresh-models").onclick = () => refreshModels();
 $("btn-generate").onclick = () => submit();
 $("btn-clear-recent").onclick = () => {
   if (!confirm("Clear all recent prompts? This only affects this browser.")) return;
@@ -438,7 +447,8 @@ function openModal(entry) {
   modalEntry = entry;
   $("modal-img").src = `/api/outputs/${encodeURIComponent(entry.name)}`;
   const grid = $("modal-meta"); grid.innerHTML = "";
-  const keys = ["model", "raw_prompt", "prompt", "negative_prompt", "seed",
+  const keys = ["model", "repo_id", "repo_url",
+                "raw_prompt", "prompt", "negative_prompt", "seed",
                 "steps", "cfg", "sampler", "clip_skip",
                 "width", "height", "dtype", "device"];
   const meta = entry.metadata || {};
@@ -481,6 +491,9 @@ const inputWrap = document.querySelector(".textarea-wrap");
 const highlight = $("prompt-highlight");
 
 function autoResize() {
+  // Skip while the inference pane is hidden — the textarea has no layout
+  // box, so scrollHeight is 0 and we'd otherwise collapse it permanently.
+  if (input.offsetParent === null) return;
   input.style.height = "auto";
   const h = input.scrollHeight;
   input.style.height = h + "px";
@@ -923,6 +936,134 @@ function onGpuStats(s) {
   } else {
     el.textContent = `${dev}  ${fmtGiB(s.allocated_bytes)} GB`;
     el.title = `RSS ${fmtGiB(s.allocated_bytes)} GB`;
+  }
+}
+
+// ---------- left-column tab switcher (inference / models) ----------
+let leftTab = "inference";
+let modelsInfo = [];
+
+function setLeftTab(tab) {
+  if (tab === leftTab) return;
+  leftTab = tab;
+  for (const b of document.querySelectorAll(".ltab")) {
+    const on = b.dataset.ltab === tab;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  for (const p of document.querySelectorAll(".lpane")) {
+    p.hidden = p.dataset.ltab !== tab;
+  }
+  if (tab === "models") refreshModels();
+  if (tab === "inference") autoResize();
+}
+
+for (const b of document.querySelectorAll(".ltab")) {
+  b.addEventListener("click", () => setLeftTab(b.dataset.ltab));
+}
+
+function fmtGB(bytes) {
+  if (!bytes || bytes <= 0) return "0";
+  return (bytes / (1024**3)).toFixed(2);
+}
+
+async function refreshModels() {
+  try {
+    const r = await wsRequest("models_info");
+    modelsInfo = r.models || [];
+    renderModels();
+  } catch (e) { appendLog(`models_info: ${e.message}`, "error"); }
+}
+
+function renderModels() {
+  const root = $("models-list");
+  root.innerHTML = "";
+  const loadedName = state?.model;
+  // Track per-model background prefetch jobs so we can disable the button
+  // while one is in flight.
+  const downloadingByModel = new Map();
+  for (const j of jobs.values()) {
+    if (j.kind === "download" && (j.status === "queued" || j.status === "running")) {
+      downloadingByModel.set(j.model, j);
+    }
+  }
+  for (const m of modelsInfo) {
+    const li = document.createElement("li");
+    li.className = "model-item " + (m.installed ? "installed" : "missing")
+                 + (m.name === loadedName ? " loaded" : "");
+
+    const nameWrap = document.createElement("div");
+    nameWrap.className = "model-name";
+    nameWrap.textContent = m.name;
+    const fam = document.createElement("span");
+    fam.className = "model-family"; fam.textContent = m.family;
+    nameWrap.appendChild(fam);
+    li.appendChild(nameWrap);
+
+    const actions = document.createElement("div");
+    actions.className = "model-actions";
+    const dlJob = downloadingByModel.get(m.name);
+
+    const dlBtn = document.createElement("button");
+    dlBtn.className = "section-btn";
+    if (dlJob) {
+      const pct = dlJob.download_total > 0
+        ? Math.round(100 * dlJob.download_n / dlJob.download_total) : null;
+      dlBtn.textContent = pct == null ? "downloading…" : `downloading ${pct}%`;
+      dlBtn.disabled = true;
+    } else if (m.installed) {
+      dlBtn.textContent = "redownload";
+      dlBtn.title = "re-fetch from HF (will refresh any updated weights)";
+    } else {
+      dlBtn.textContent = "download";
+      dlBtn.title = "fetch from HF without loading into memory";
+    }
+    dlBtn.onclick = async () => {
+      dlBtn.disabled = true; dlBtn.textContent = "starting…";
+      try {
+        await wsRequest("model_download", { name: m.name });
+        appendLog(`download started: ${m.name}`);
+      } catch (e) {
+        appendLog(`download: ${e.message}`, "error");
+        dlBtn.disabled = false;
+      }
+    };
+    actions.appendChild(dlBtn);
+
+    const loadBtn = document.createElement("button");
+    loadBtn.className = "section-btn";
+    loadBtn.textContent = m.name === loadedName ? "loaded" : "load";
+    loadBtn.disabled = m.name === loadedName || !!dlJob;
+    loadBtn.title = "swap this in as the active model";
+    loadBtn.onclick = async () => {
+      loadBtn.disabled = true;
+      try { await wsRequest("model_switch", { name: m.name }); }
+      catch (e) { appendLog(`load: ${e.message}`, "error"); loadBtn.disabled = false; }
+    };
+    actions.appendChild(loadBtn);
+    li.appendChild(actions);
+
+    const desc = document.createElement("div");
+    desc.className = "model-desc"; desc.textContent = m.description;
+    li.appendChild(desc);
+
+    const meta = document.createElement("div");
+    meta.className = "model-meta";
+    if (m.repo_url) {
+      const a = document.createElement("a");
+      a.href = m.repo_url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.textContent = m.repo_id; a.title = m.repo_url;
+      meta.appendChild(a);
+    }
+    const status = document.createElement("span");
+    status.className = "model-status " + (m.installed ? "ok" : "missing");
+    status.textContent = m.installed
+      ? `installed · ${fmtGB(m.size_bytes)} GB`
+      : "not installed";
+    meta.appendChild(status);
+    li.appendChild(meta);
+
+    root.appendChild(li);
   }
 }
 

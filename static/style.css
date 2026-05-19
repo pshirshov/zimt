@@ -38,6 +38,21 @@
   .topbar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
     padding: 10px 14px; border-bottom: 1px solid var(--border); }
   .topbar h1 { font-size: 14px; margin: 0; color: var(--muted); font-weight: 500; }
+
+  /* Left-column tab switcher in the topbar: "inference" / "models". */
+  .left-tabs { display: flex; gap: 2px; }
+  .ltab {
+    padding: 4px 10px; border-radius: 4px;
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--border);
+    font: 12px ui-monospace, monospace;
+  }
+  .ltab:hover { color: var(--fg); border-color: var(--accent); }
+  .ltab.active { background: var(--accent); color: #fff; border-color: transparent; }
+  /* Each left-pane variant fills the left column the same way the old
+     prompt-bar + left-content did. */
+  .lpane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .lpane[hidden] { display: none; }
   .prompt-bar { flex: 0 0 auto; padding: 10px 14px; border-bottom: 1px solid var(--border); }
   /* Small action button hosted inside a section header (h2). It overrides
      the h2's uppercase styling so it reads as a button, not a label. */
@@ -233,6 +248,30 @@
     font: 12px ui-monospace, monospace; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .recent-item:hover { background: #2e2e38; }
+
+  /* Models tab: one item per registered model. */
+  .models-list { list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 6px; }
+  .model-item { padding: 8px 10px; border-radius: 4px; background: #25252b;
+    display: grid; grid-template-columns: 1fr auto; gap: 4px 10px;
+    font: 12px ui-monospace, monospace; }
+  .model-item.installed { border-left: 3px solid var(--ok); }
+  .model-item.missing   { border-left: 3px solid var(--border); }
+  .model-item.loaded    { background: #2a3050; }
+  .model-name { font-weight: 600; color: var(--fg); }
+  .model-name .model-family { font-weight: 400; color: var(--muted);
+    font-size: 11px; margin-left: 6px; }
+  .model-desc { grid-column: 1 / -1; color: var(--muted); white-space: normal; }
+  .model-meta { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center;
+    color: var(--muted); font-size: 11px; flex-wrap: wrap; }
+  .model-meta a { color: var(--accent); text-decoration: none; }
+  .model-meta a:hover { text-decoration: underline; }
+  .model-status { font-weight: 600; }
+  .model-status.ok { color: var(--ok); }
+  .model-status.missing { color: var(--muted); }
+  .model-actions { display: flex; gap: 6px; align-items: center; justify-self: end; }
+  .model-actions .section-btn { font-size: 11px; }
+  .model-actions .section-btn:disabled { opacity: 0.45; cursor: default; }
 
   .log-line { padding: 4px 8px; background: #25252b; border-radius: 3px;
     margin-top: 4px; font: 12px ui-monospace, monospace; color: var(--muted);

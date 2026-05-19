@@ -30,6 +30,7 @@ MODELS: dict[str, ModelSpec] = {
     "z-image-turbo": ModelSpec(
         name="z-image-turbo",
         description="Tongyi-MAI Z-Image-Turbo (6B DiT, Qwen3 text enc, CFG=0)",
+        repo_id="Tongyi-MAI/Z-Image-Turbo",
         family="zimage",
         default_steps=9,
         default_cfg=0.0,
@@ -47,6 +48,7 @@ MODELS: dict[str, ModelSpec] = {
     "pony-v6-xl": ModelSpec(
         name="pony-v6-xl",
         description="Pony Diffusion V6 XL (SDXL fine-tune, Euler-a, CFG=7, score-tag prefix)",
+        repo_id="kitty7779/ponyDiffusionV6XL",
         family="sdxl",
         default_steps=25,
         default_cfg=7.0,
@@ -64,6 +66,7 @@ MODELS: dict[str, ModelSpec] = {
     "illustrious-xl-v1": ModelSpec(
         name="illustrious-xl-v1",
         description="Illustrious-XL v1.0 (anime-focused SDXL fine-tune by OnomaAI, Euler-a, CFG=6)",
+        repo_id="WhiteAiZ/Illustrious-xl-v1.0",
         family="sdxl",
         default_steps=24,
         default_cfg=6.0,
@@ -80,6 +83,7 @@ MODELS: dict[str, ModelSpec] = {
     "hassaku-xl-illustrious": ModelSpec(
         name="hassaku-xl-illustrious",
         description="Hassaku XL Illustrious v3.1 (anime-realistic Illustrious fine-tune)",
+        repo_id="John6666/hassaku-xl-illustrious-v31-sdxl",
         family="sdxl",
         default_steps=28,
         default_cfg=6.0,
@@ -94,6 +98,7 @@ MODELS: dict[str, ModelSpec] = {
     "wai-nsfw-illustrious": ModelSpec(
         name="wai-nsfw-illustrious",
         description="WAI-NSFW-Illustrious v8.0 (Illustrious-based, NSFW-focused)",
+        repo_id="John6666/wai-nsfw-illustrious-v80-sdxl",
         family="sdxl",
         default_steps=28,
         default_cfg=6.0,
@@ -108,6 +113,7 @@ MODELS: dict[str, ModelSpec] = {
     "wai-nsfw-illustrious-v110": ModelSpec(
         name="wai-nsfw-illustrious-v110",
         description="WAI-NSFW-Illustrious v11.0 (Illustrious-based, NSFW-focused)",
+        repo_id="John6666/wai-nsfw-illustrious-v110-sdxl",
         family="sdxl",
         default_steps=28,
         default_cfg=6.0,
@@ -122,6 +128,7 @@ MODELS: dict[str, ModelSpec] = {
     "wai-mature-illustrious": ModelSpec(
         name="wai-mature-illustrious",
         description="WAI-Mature-Illustrious v2.0 (Illustrious-based, mature/body/style focus)",
+        repo_id="John6666/wai-mature-illustrious-v20-sdxl",
         family="sdxl",
         default_steps=28,
         default_cfg=6.0,
@@ -139,6 +146,7 @@ MODELS: dict[str, ModelSpec] = {
             "NoobAI XL Vpred 1.0 (Illustrious-based, v-prediction; "
             "needs prediction_type override since upstream config is wrong)"
         ),
+        repo_id="Laxhar/noobai-XL-Vpred-1.0",
         family="sdxl",
         default_steps=30,
         default_cfg=5.0,
@@ -154,6 +162,7 @@ MODELS: dict[str, ModelSpec] = {
     "animagine-xl-4": ModelSpec(
         name="animagine-xl-4",
         description="Animagine XL 4.0 (Cagliostro Lab's flagship anime SDXL)",
+        repo_id="cagliostrolab/animagine-xl-4.0",
         family="sdxl",
         default_steps=28,
         default_cfg=5.0,
@@ -170,6 +179,7 @@ MODELS: dict[str, ModelSpec] = {
     "cyberrealistic-pony": ModelSpec(
         name="cyberrealistic-pony",
         description="CyberRealistic Pony v8.5 (Pony v6-based, photorealism focus)",
+        repo_id="John6666/cyberrealistic-pony-v85-sdxl",
         family="sdxl",
         default_steps=25,
         default_cfg=7.0,
@@ -184,6 +194,7 @@ MODELS: dict[str, ModelSpec] = {
     "pony-realism-v23": ModelSpec(
         name="pony-realism-v23",
         description="Pony Realism v2.3 (Pony-family, photorealism focus)",
+        repo_id="John6666/pony-realism-v23-sdxl",
         family="sdxl",
         default_steps=25,
         default_cfg=7.0,
@@ -198,6 +209,7 @@ MODELS: dict[str, ModelSpec] = {
     "spicy-realism-nsfw-mix": ModelSpec(
         name="spicy-realism-nsfw-mix",
         description="Spicy Realism NSFW Mix v3.0 (Pony-family, adult photorealism focus)",
+        repo_id="John6666/spicy-realism-nsfw-mix-v30-sdxl",
         family="sdxl",
         default_steps=25,
         default_cfg=7.0,

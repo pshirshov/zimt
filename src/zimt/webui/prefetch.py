@@ -20,7 +20,9 @@ import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from typing import Any
 
+from ..models.loras import LORAS
 from ..models.registry import MODELS
 from .downloads import set_active_download
 from .state import Job, STATE
@@ -40,17 +42,23 @@ def _snapshot_download_sync(repo_id: str) -> None:
     snapshot_download(repo_id=repo_id)
 
 
-async def prefetch_model(name: str) -> str:
-    """Start a background prefetch for the registered model ``name``.
+async def prefetch_model(name: str, *, kind: str = "base") -> str:
+    """Start a background prefetch for the registered base or LoRA ``name``.
 
-    Returns the Job id. Raises :class:`PrefetchError` if the model isn't
+    Returns the Job id. Raises :class:`PrefetchError` if the entry isn't
     registered or has no ``repo_id``.
     """
-    if name not in MODELS:
-        raise PrefetchError(f"unknown model {name!r}")
-    spec = MODELS[name]
+    if kind == "base":
+        registry: dict[str, Any] = MODELS
+    elif kind == "lora":
+        registry = LORAS
+    else:
+        raise PrefetchError(f"unknown kind {kind!r}")
+    if name not in registry:
+        raise PrefetchError(f"unknown {kind} {name!r}")
+    spec = registry[name]
     if not spec.repo_id:
-        raise PrefetchError(f"model {name!r} has no associated HF repo")
+        raise PrefetchError(f"{kind} {name!r} has no associated HF repo")
 
     job = Job(
         id=uuid.uuid4().hex,
@@ -76,7 +84,8 @@ async def prefetch_model(name: str) -> str:
                 await emit_job(job)
                 await emit_log(f"prefetched {name} ({spec.repo_id})")
                 await broadcast({"type": "model_prefetched",
-                                 "model": name, "repo_id": spec.repo_id})
+                                 "kind": kind, "model": name,
+                                 "repo_id": spec.repo_id})
             except Exception as e:
                 job.status = "error"
                 job.error = repr(e)

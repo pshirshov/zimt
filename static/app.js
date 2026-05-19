@@ -16,6 +16,20 @@ const LS = {
   setHistory: (xs) => localStorage.setItem("zimt.history", JSON.stringify(xs.slice(0, 50))),
 };
 
+// Shown in place of the empty history so a first-time user can see the
+// command shape at a glance. Each entry exercises a different feature:
+// model swap, /res + /sampler, /many, /lora stacking, A1111 weighting,
+// /negprompt + /cfg + /steps composition.
+const SHOWCASE_PROMPTS = [
+  "/model z-image-turbo cute anime girl riding a unicorn through a sunflower field",
+  "/model pony-v6-xl serene mountain lake at dawn",
+  "/res landscape /sampler dpmpp-2m-karras a dragon flying over volcanic plains",
+  "/many 4 cozy cabin in a snowy forest at night",
+  "/model illustrious-xl-v1 /lora pixel-art-xl pixel art castle on a cliff",
+  "(detailed:1.3) portrait of a fox in a wizard hat",
+  "/negprompt blurry, low quality /cfg 7 /steps 30 a galaxy in a glass jar",
+];
+
 // ---------- websocket + RPC ----------
 // Connection lifecycle (state machine, heartbeat, backoff, time-jump,
 // defer-while-hidden, terminal state) lives in connection.js. We just
@@ -44,6 +58,7 @@ function dispatchEvent(m) {
   else if (m.type === "model_loaded")  onModelLoaded(m.model);
   else if (m.type === "model_error")   onModelError(m.error);
   else if (m.type === "model_prefetched") onModelPrefetched();
+  else if (m.type === "registries_changed") onModelPrefetched();
 }
 
 function onModelPrefetched() {
@@ -153,6 +168,10 @@ function fmtState(s) {
     `negprompt: ${JSON.stringify(st.negative_prompt ?? "")}`,
   ];
   if (st.score_tags) lines.push(`auto-prefix: ${JSON.stringify(st.score_tags)}`);
+  if (st.lora_stack && st.lora_stack.length) {
+    const txt = st.lora_stack.map(e => `${e.name}:${e.weight}`).join(", ");
+    lines.push(`loras:  ${txt}`);
+  }
   return lines.join("\n");
 }
 
@@ -169,7 +188,9 @@ function onStateUpdate(s) {
   const pre = $("state-text");
   pre.textContent = fmtState(s);
   pre.classList.toggle("empty", !s.loaded);
-  if (leftTab === "models" && modelsInfo.length) renderModels();
+  if (leftTab === "models" && (modelsBases.length || modelsLoras.length)) {
+    renderBases(); renderLoras();
+  }
 }
 
 function onModelLoading(name) {
@@ -202,7 +223,9 @@ function onJob(j) {
   }
   renderQueue();
   // Mirror download-job progress into the models tab if it's visible.
-  if (leftTab === "models" && j.kind === "download") renderModels();
+  if (leftTab === "models" && j.kind === "download") {
+    renderBases(); renderLoras();
+  }
 }
 
 function fmtBytes(n) {
@@ -422,11 +445,23 @@ $("btn-clear-recent").onclick = () => {
 // ---------- recent prompts ----------
 function renderRecent() {
   const root = $("recent-list"); root.innerHTML = "";
-  for (const p of LS.history()) {
+  const history = LS.history();
+  const entries = history.length
+    ? history.map((p) => ({ text: p, showcase: false }))
+    : SHOWCASE_PROMPTS.map((p) => ({ text: p, showcase: true }));
+  if (!history.length) {
+    const hint = document.createElement("li");
+    hint.className = "recent-hint";
+    hint.textContent = "no recent prompts — click one to load it:";
+    root.appendChild(hint);
+  }
+  for (const e of entries) {
     const li = document.createElement("li");
-    li.className = "recent-item"; li.title = p; li.textContent = p;
+    li.className = "recent-item" + (e.showcase ? " showcase" : "");
+    li.title = e.showcase ? `example: ${e.text}` : e.text;
+    li.textContent = e.text;
     li.onclick = () => {
-      $("prompt-input").value = p;
+      $("prompt-input").value = e.text;
       $("prompt-input").focus();
       autoResize();
     };
@@ -449,7 +484,7 @@ function openModal(entry) {
   const grid = $("modal-meta"); grid.innerHTML = "";
   const keys = ["model", "repo_id", "repo_url",
                 "raw_prompt", "prompt", "negative_prompt", "seed",
-                "steps", "cfg", "sampler", "clip_skip",
+                "steps", "cfg", "sampler", "clip_skip", "loras",
                 "width", "height", "dtype", "device"];
   const meta = entry.metadata || {};
   for (const k of keys) {
@@ -941,7 +976,8 @@ function onGpuStats(s) {
 
 // ---------- left-column tab switcher (inference / models) ----------
 let leftTab = "inference";
-let modelsInfo = [];
+let modelsBases = [];
+let modelsLoras = [];
 
 function setLeftTab(tab) {
   if (tab === leftTab) return;
@@ -970,24 +1006,97 @@ function fmtGB(bytes) {
 async function refreshModels() {
   try {
     const r = await wsRequest("models_info");
-    modelsInfo = r.models || [];
-    renderModels();
+    modelsBases = r.bases || [];
+    modelsLoras = r.loras || [];
+    renderBases();
+    renderLoras();
   } catch (e) { appendLog(`models_info: ${e.message}`, "error"); }
 }
 
-function renderModels() {
+function _downloadingByName(kind) {
+  // Map: name -> Job for the most-recent active download job of that kind.
+  const out = new Map();
+  for (const j of jobs.values()) {
+    if (j.kind !== "download") continue;
+    if (j.status !== "queued" && j.status !== "running") continue;
+    out.set(j.model, j);
+  }
+  return out;
+}
+
+function _activeLoraMap() {
+  const m = new Map();
+  for (const e of state?.settings?.lora_stack ?? []) m.set(e.name, e.weight);
+  return m;
+}
+
+function _addCommonMeta(li, m, kind, downloadingByName, opts = {}) {
+  const meta = document.createElement("div");
+  meta.className = "model-meta";
+  if (m.repo_url) {
+    const a = document.createElement("a");
+    a.href = m.repo_url; a.target = "_blank"; a.rel = "noopener noreferrer";
+    a.textContent = m.repo_id; a.title = m.repo_url;
+    meta.appendChild(a);
+  }
+  const status = document.createElement("span");
+  status.className = "model-status " + (m.installed ? "ok" : "missing");
+  status.textContent = m.installed
+    ? `installed · ${fmtGB(m.size_bytes)} GB`
+    : "not installed";
+  meta.appendChild(status);
+  if (!m.is_builtin) {
+    const b = document.createElement("span");
+    b.className = "custom-badge"; b.textContent = "custom";
+    meta.appendChild(b);
+  }
+  if (opts.tags && opts.tags.length) {
+    const t = document.createElement("span");
+    t.className = "model-tags";
+    t.textContent = opts.tags.join(" · ");
+    meta.appendChild(t);
+  }
+  li.appendChild(meta);
+
+  const actions = document.createElement("div");
+  actions.className = "model-actions";
+  const dlJob = downloadingByName.get(m.name);
+
+  const dlBtn = document.createElement("button");
+  dlBtn.className = "section-btn";
+  if (dlJob) {
+    const pct = dlJob.download_total > 0
+      ? Math.round(100 * dlJob.download_n / dlJob.download_total) : null;
+    dlBtn.textContent = pct == null ? "downloading…" : `downloading ${pct}%`;
+    dlBtn.disabled = true;
+  } else if (m.installed) {
+    dlBtn.textContent = "redownload";
+    dlBtn.title = "re-fetch from HF (will refresh any updated weights)";
+  } else {
+    dlBtn.textContent = "download";
+    dlBtn.title = "fetch from HF without loading";
+  }
+  dlBtn.onclick = async () => {
+    dlBtn.disabled = true; dlBtn.textContent = "starting…";
+    try {
+      await wsRequest("model_download", { name: m.name, kind });
+      appendLog(`download started: ${m.name}`);
+    } catch (e) {
+      appendLog(`download: ${e.message}`, "error");
+      dlBtn.disabled = false;
+    }
+  };
+  actions.appendChild(dlBtn);
+
+  return { meta, actions, dlJob };
+}
+
+function renderBases() {
   const root = $("models-list");
   root.innerHTML = "";
   const loadedName = state?.model;
-  // Track per-model background prefetch jobs so we can disable the button
-  // while one is in flight.
-  const downloadingByModel = new Map();
-  for (const j of jobs.values()) {
-    if (j.kind === "download" && (j.status === "queued" || j.status === "running")) {
-      downloadingByModel.set(j.model, j);
-    }
-  }
-  for (const m of modelsInfo) {
+  const downloading = _downloadingByName("base");
+  for (const m of modelsBases) {
     const li = document.createElement("li");
     li.className = "model-item " + (m.installed ? "installed" : "missing")
                  + (m.name === loadedName ? " loaded" : "");
@@ -1000,35 +1109,12 @@ function renderModels() {
     nameWrap.appendChild(fam);
     li.appendChild(nameWrap);
 
-    const actions = document.createElement("div");
-    actions.className = "model-actions";
-    const dlJob = downloadingByModel.get(m.name);
+    const desc = document.createElement("div");
+    desc.className = "model-desc"; desc.textContent = m.description;
+    li.appendChild(desc);
 
-    const dlBtn = document.createElement("button");
-    dlBtn.className = "section-btn";
-    if (dlJob) {
-      const pct = dlJob.download_total > 0
-        ? Math.round(100 * dlJob.download_n / dlJob.download_total) : null;
-      dlBtn.textContent = pct == null ? "downloading…" : `downloading ${pct}%`;
-      dlBtn.disabled = true;
-    } else if (m.installed) {
-      dlBtn.textContent = "redownload";
-      dlBtn.title = "re-fetch from HF (will refresh any updated weights)";
-    } else {
-      dlBtn.textContent = "download";
-      dlBtn.title = "fetch from HF without loading into memory";
-    }
-    dlBtn.onclick = async () => {
-      dlBtn.disabled = true; dlBtn.textContent = "starting…";
-      try {
-        await wsRequest("model_download", { name: m.name });
-        appendLog(`download started: ${m.name}`);
-      } catch (e) {
-        appendLog(`download: ${e.message}`, "error");
-        dlBtn.disabled = false;
-      }
-    };
-    actions.appendChild(dlBtn);
+    const { actions, dlJob } = _addCommonMeta(li, m, "base", downloading,
+      { tags: m.compatibility_tags || [] });
 
     const loadBtn = document.createElement("button");
     loadBtn.className = "section-btn";
@@ -1041,31 +1127,160 @@ function renderModels() {
       catch (e) { appendLog(`load: ${e.message}`, "error"); loadBtn.disabled = false; }
     };
     actions.appendChild(loadBtn);
+
+    if (!m.is_builtin) actions.appendChild(_removeBtn("base", m.name));
+
     li.appendChild(actions);
+    root.appendChild(li);
+  }
+}
+
+function renderLoras() {
+  const root = $("loras-list");
+  root.innerHTML = "";
+  const downloading = _downloadingByName("lora");
+  const active = _activeLoraMap();
+  const base = modelsBases.find((b) => b.name === state?.model);
+  const baseTags = new Set(base?.compatibility_tags || []);
+
+  for (const m of modelsLoras) {
+    const compat = (m.compatible_with || []);
+    const compatible = !baseTags.size || compat.some((t) => baseTags.has(t));
+    const isActive = active.has(m.name);
+
+    const li = document.createElement("li");
+    li.className = "model-item " + (m.installed ? "installed" : "missing")
+                 + (compatible ? "" : " incompatible");
+
+    const nameWrap = document.createElement("div");
+    nameWrap.className = "model-name";
+    nameWrap.textContent = m.name;
+    const fam = document.createElement("span");
+    fam.className = "model-family"; fam.textContent = "lora · " + m.family;
+    nameWrap.appendChild(fam);
+    if (isActive) {
+      const badge = document.createElement("span");
+      badge.className = "model-active-badge";
+      badge.style.marginLeft = "6px";
+      badge.textContent = `active @ ${active.get(m.name)}`;
+      nameWrap.appendChild(badge);
+    }
+    li.appendChild(nameWrap);
 
     const desc = document.createElement("div");
     desc.className = "model-desc"; desc.textContent = m.description;
     li.appendChild(desc);
 
-    const meta = document.createElement("div");
-    meta.className = "model-meta";
-    if (m.repo_url) {
-      const a = document.createElement("a");
-      a.href = m.repo_url; a.target = "_blank"; a.rel = "noopener noreferrer";
-      a.textContent = m.repo_id; a.title = m.repo_url;
-      meta.appendChild(a);
+    if (m.trigger_tags) {
+      const trig = document.createElement("div");
+      trig.className = "model-trigger";
+      trig.textContent = `trigger: ${m.trigger_tags}`;
+      li.appendChild(trig);
     }
-    const status = document.createElement("span");
-    status.className = "model-status " + (m.installed ? "ok" : "missing");
-    status.textContent = m.installed
-      ? `installed · ${fmtGB(m.size_bytes)} GB`
-      : "not installed";
-    meta.appendChild(status);
-    li.appendChild(meta);
 
+    const { actions, dlJob } = _addCommonMeta(li, m, "lora", downloading,
+      { tags: compat });
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "section-btn";
+    addBtn.textContent = isActive ? "remove" : "add";
+    addBtn.title = compatible
+      ? (isActive ? "remove from active LoRA stack" : "add to active LoRA stack")
+      : `incompatible: lora needs ${compat.join("/") || "?"}; base is ${[...baseTags].join("/") || "—"}`;
+    addBtn.disabled = !compatible || !state?.loaded || !!dlJob;
+    addBtn.onclick = async () => {
+      addBtn.disabled = true;
+      const arg = isActive ? `-${m.name}` : m.name;
+      try { await wsRequest("exec", { line: `/lora ${arg}` }); }
+      catch (e) { appendLog(`/lora: ${e.message}`, "error"); addBtn.disabled = false; }
+    };
+    actions.appendChild(addBtn);
+
+    if (!m.is_builtin) actions.appendChild(_removeBtn("lora", m.name));
+
+    li.appendChild(actions);
     root.appendChild(li);
   }
 }
+
+function _removeBtn(kind, name) {
+  const btn = document.createElement("button");
+  btn.className = "section-btn";
+  btn.textContent = "✕";
+  btn.title = `remove custom ${kind} (deletes the JSON descriptor)`;
+  btn.onclick = async () => {
+    if (!confirm(`Delete custom ${kind} "${name}"?`)) return;
+    btn.disabled = true;
+    try {
+      await wsRequest("custom_remove", { kind, name });
+      appendLog(`removed custom ${kind}: ${name}`);
+      await refreshModels();
+    } catch (e) { appendLog(`remove: ${e.message}`, "error"); btn.disabled = false; }
+  };
+  return btn;
+}
+
+// ---------- custom-add modal ----------
+let customKind = "lora";
+
+function openCustomForm(kind) {
+  customKind = kind;
+  $("custom-modal-title").textContent = `add custom ${kind}`;
+  $("custom-form").reset();
+  $("custom-form-err").textContent = "";
+  for (const el of document.querySelectorAll(".custom-lora-only")) {
+    el.hidden = kind !== "lora";
+  }
+  for (const el of document.querySelectorAll(".custom-base-only")) {
+    el.hidden = kind !== "base";
+  }
+  $("custom-modal").classList.add("open");
+}
+
+function closeCustomForm() {
+  $("custom-modal").classList.remove("open");
+}
+
+$("btn-add-base").onclick = () => openCustomForm("base");
+$("btn-add-lora").onclick = () => openCustomForm("lora");
+$("custom-cancel").onclick = closeCustomForm;
+$("custom-modal").onclick = (e) => {
+  if (e.target === $("custom-modal")) closeCustomForm();
+};
+$("custom-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  const tagsRaw = (form.get("tags") || "").trim();
+  const tags = tagsRaw ? tagsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+  const desc = {
+    name: form.get("name"),
+    repo_id: form.get("repo_id"),
+    description: form.get("description"),
+    family: form.get("family"),
+  };
+  if (customKind === "lora") {
+    desc.compatible_with = tags.length ? tags : [desc.family];
+    if (form.get("weight_name")) desc.weight_name = form.get("weight_name");
+    desc.default_weight = parseFloat(form.get("default_weight") || "1.0");
+    if (form.get("trigger_tags")) desc.trigger_tags = form.get("trigger_tags");
+  } else {
+    desc.compatibility_tags = tags.length ? tags : [desc.family];
+    desc.default_steps = parseInt(form.get("default_steps") || "28", 10);
+    desc.default_cfg = parseFloat(form.get("default_cfg") || "6.0");
+    desc.default_sampler = form.get("default_sampler") || "euler-a";
+    if (form.get("score_tags")) desc.score_tags = form.get("score_tags");
+    if (form.get("default_negative")) desc.default_negative = form.get("default_negative");
+  }
+  $("custom-form-err").textContent = "";
+  try {
+    await wsRequest("custom_add", { kind: customKind, descriptor: desc });
+    appendLog(`added custom ${customKind}: ${desc.name}`);
+    closeCustomForm();
+    await refreshModels();
+  } catch (err) {
+    $("custom-form-err").textContent = err.message;
+  }
+});
 
 // ---------- mobile tab toggle ----------
 function setupMobileTabs() {

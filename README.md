@@ -26,15 +26,34 @@ Models currently supported:
 | `pony-realism-v23` | `John6666/pony-realism-v23-sdxl` | Pony-family, photorealism focus |
 | `spicy-realism-nsfw-mix` | `John6666/spicy-realism-nsfw-mix-v30-sdxl` | Pony-family, adult photorealism focus |
 
+Built-in LoRAs (all SDXL — compatible with every base except `z-image-turbo`):
+
+| name | source | trigger | notes |
+|---|---|---|---|
+| `pixel-art-xl` | `nerijs/pixel-art-xl` | `pixel art` | Nerijs's pixel-art style |
+| `ascii-art` | `CiroN2022/ascii-art` | `ascii_art` | ASCII-art style |
+| `studio-ghibli-style` | `KappaNeuro/studio-ghibli-style` | `Studio Ghibli Style` | Ghibli-look fine-tune |
+
 The fp16-fix VAE is wired through a shared `make_sdxl_loader` factory
 (`src/zimt/models/sdxl_factory.py`), so adding another SDXL fine-tune is
 typically two lines (a `make_sdxl_loader("hf/repo")` plus a `ModelSpec`
 entry).
 
+LoRAs ship as a built-in starter set (`pixel-art-xl`, `ascii-art`,
+`studio-ghibli-style` — all SDXL) and can be stacked at runtime via
+`/lora <name>[:weight]`. Compatibility is enforced through tag overlap
+between the base's `compatibility_tags` and the LoRA's `compatible_with`.
+
+You can also drop your own bases and LoRAs in as JSON descriptors under
+`./custom/{bases,loras}/*.json` (or `$XDG_DATA_HOME/zimt/custom/` for
+installed builds) — see `src/zimt/models/custom.py` for the schema, or
+use the "+ add" form in the web UI's `models` tab. No restart needed:
+they reload on every add/remove.
+
 The codebase is a single Python package (`src/zimt/`) with two entry modes
 sharing the same command parser, so anything you can do in the CLI
-(`/model`, `/cfg`, `/res`, `/many`, `/tokenize`, …) works verbatim in the
-web UI's prompt box too.
+(`/model`, `/cfg`, `/res`, `/many`, `/lora`, `/tokenize`, …) works
+verbatim in the web UI's prompt box too.
 
 ## Quick start (dev tree)
 
@@ -61,11 +80,12 @@ Useful CLI flags:
 ## REPL / web command surface
 
 Multi-command lines compose left-to-right; greedy commands (`/negprompt`,
-`/tokenize`, `/many`) stop at the next `/cmd`:
+`/tokenize`, `/many`, `/lora`) stop at the next `/cmd`:
 
 ```
 /model pony-v6-xl /cfg 5 /steps 25 /res 1216x832 cute anime girl
 /many 8 /seed 42 a forest
+/lora pixel-art-xl:0.8 ascii-art:0.5 a knight at sunset
 /tokenize 西安大雁塔 ⚡️ supercalifragilistic
 ```
 
@@ -81,6 +101,7 @@ Multi-command lines compose left-to-right; greedy commands (`/negprompt`,
 | `/clip_skip N` | SDXL only — skip top N CLIP layers (0=off; Pony was trained with 2) |
 | `/negprompt …` / `/negprompt -` | set / clear negative prompt |
 | `/model <name>` | swap the loaded model (no-op if already loaded) |
+| `/lora <name>[:w]` …  | stack LoRAs on top of the active base (A1111-style). `-<name>` removes one, bare `-` clears. Bare `/lora` lists active. |
 | `/tokenize <text>` | per-encoder token analysis + budget headroom |
 | `/help` / `/quit` | help / leave |
 
@@ -90,22 +111,37 @@ syntax and routes through compel for SDXL; Z-Image falls back to plain
 strings (compel doesn't have a Qwen3 adapter).
 
 Tab-completion works in both modes — `/m<TAB>` cycles `/model`/`/many`,
-`/model <TAB>` cycles registered model names. Up/Down navigates prompt
-history.
+`/model <TAB>` cycles registered model names, `/lora <TAB>` cycles
+LoRAs compatible with the currently-loaded base. Up/Down navigates
+prompt history.
 
 ## Web UI features
 
+* Top-bar tab switcher between `inference` (prompt + state + queue +
+  recent) and `models` (per-entry install status / size / HF link /
+  prefetch / load / per-row remove for custom entries; separate
+  sections for base models and LoRAs).
+* `+ add` button per section opens a form that writes a JSON descriptor
+  under `custom/{bases,loras}/` and hot-reloads it.
+* Active LoRA stack is reflected in state + image PNG metadata, and is
+  reproduced verbatim by the modal `Restore to prompt` button.
+* "Recent prompts" surfaces a showcase set when empty so new users see
+  the command shape (`/model`, `/lora`, `/res`, weighting, `/many`, …)
+  at a glance.
 * Two-tab thumbnail browser (`all` / `favs`) with `★` per-thumb favorite
   toggle and modal preview (full image + every PNG metadata field + per-row
   copy button + Restore-to-prompt that reproduces the run byte-for-byte).
 * Resizable splitter; thumbnail grid uses `auto-fill` so a new column
   snaps in as you widen the panel.
 * WebSocket-driven job queue with per-step progress bars (`callback_on_step_end`
-  hook), cancel-one + cancel-all + clear-completed.
-* Three section-header buttons:
+  hook), cancel-one + cancel-all + clear-completed. Model downloads
+  (load OR prefetch) appear as their own job rows with per-file byte
+  progress streamed from HF's tqdm.
+* Section-header action buttons:
   * `outputs` → `clean` (deletes non-favorite PNGs server-side)
   * `queue` → `cancel all` + `clear` (drop done/error/canceled jobs)
   * `recent prompts` → `clear` (localStorage-only)
+  * `base models` / `loras` → `+ add` + `refresh`
 * `Cache-Control: no-store` on every static asset so dev iterations land
   without forced reloads.
 
@@ -213,29 +249,40 @@ zimt/
 │   └── seed-wheel-hashes.sh      # network fallback via nix-prefetch-url
 ├── src/zimt/
 │   ├── __main__.py / cli.py      # argparse, env-var pre-pass
-│   ├── paths.py                  # OUT_DIR / HF_HOME / Nix-store fallback
+│   ├── paths.py                  # OUT_DIR / HF_HOME / CUSTOM_DIR / Nix-store fallback
 │   ├── device.py                 # auto-detect cuda / xpu / mps / cpu
 │   ├── buckets.py                # SDXL_BUCKETS + ZIMAGE_BUCKETS + /res parser
 │   ├── tokenize_report.py        # per-encoder analysis
-│   ├── generate.py               # GenConfig, generate(), CancelledByUser
+│   ├── generate.py               # GenConfig (incl. lora_stack), generate()
+│   ├── lora_cmd.py               # shared /lora arg parser + compat check
 │   ├── preview.py                # kitty / iTerm inline + tmux passthrough
 │   ├── models/
-│   │   ├── spec.py               # ModelSpec dataclass
+│   │   ├── spec.py               # ModelSpec + LoraSpec dataclasses
 │   │   ├── sdxl_common.py        # shared SDXL two-encoder tokenize
-│   │   ├── {zimage,pony,illustrious}.py
+│   │   ├── sdxl_factory.py       # make_sdxl_loader (fp16-fix VAE wired in)
+│   │   ├── {zimage,pony,illustrious,noobai,community}.py
+│   │   ├── loras.py              # built-in LoRA registry (LORAS = { … })
+│   │   ├── custom.py             # JSON descriptors → MODELS / LORAS at runtime
 │   │   └── registry.py           # MODELS = { … }
 │   ├── repl/
 │   │   ├── commands.py           # parse_commands + COMMAND_ARITY
-│   │   ├── history.py            # readline + Tab completion
+│   │   ├── history.py            # readline + Tab completion (incl. /lora)
 │   │   └── main.py               # repl_main()
 │   └── webui/
-│       ├── app.py                # FastAPI routes + run_web()
+│       ├── app.py                # FastAPI routes + run_web() + RPC handlers
+│       ├── rpc.py                # WebSocket JSON-RPC dispatcher
 │       ├── state.py              # AppState, Job, locks
 │       ├── ws.py                 # broadcast helpers
-│       ├── loader.py             # async model swap
+│       ├── loader.py             # async model swap (with Job-tracked download)
+│       ├── prefetch.py           # download-only model_download RPC
+│       ├── downloads.py          # huggingface_hub tqdm → WS bridge
+│       ├── models_info.py        # install/size scan against HF cache
 │       ├── jobs.py               # run_job() worker + cancel/progress
 │       ├── outputs.py            # listing + favorite + cleanup
 │       └── exec_api.py           # /api/exec multi-command executor
+├── custom/                       # user-supplied descriptors (gitignored)
+│   ├── bases/<slug>.json
+│   └── loras/<slug>.json
 └── static/                       # vanilla HTML / CSS / JS, no build step
 ```
 

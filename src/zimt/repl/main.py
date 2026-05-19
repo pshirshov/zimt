@@ -9,6 +9,8 @@ import torch
 
 from ..buckets import parse_res
 from ..generate import GenConfig, generate, load_spec, unload
+from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
+from ..models.custom import reload_custom_into_registries
 from ..models.registry import MODELS
 from ..preview import IN_TMUX, detect_protocol, preview
 from .commands import parse_commands
@@ -29,6 +31,7 @@ def _help() -> None:
     print("  /sampler <name>      switch scheduler (model-specific; tab-complete)")
     print("  /clip_skip N         SDXL only — skip top N CLIP layers (0=off, 2=Pony default)")
     print("  /model [name]        switch model; bare lists available")
+    print("  /lora ...            add/remove LoRAs: name, name:0.8, -name, -")
     print("  /tokenize <text>     show per-encoder tokenization heuristics")
     print("  /help                show this")
     print("  /quit | /exit | ^D   leave")
@@ -74,6 +77,9 @@ def _new_config(name: str) -> GenConfig:
 
 
 def repl_main() -> int:
+    report = reload_custom_into_registries()
+    for err in report["errors"]:
+        print(f"custom descriptor error: {err}")
     init_readline()
     print(f"torch={torch.__version__}  xpu={torch.xpu.is_available() if hasattr(torch, 'xpu') else False}")
     if hasattr(torch, "xpu") and torch.xpu.is_available():
@@ -166,6 +172,18 @@ def repl_main() -> int:
                 _help()
                 if g is not None:
                     _print_state(g)
+            elif cmd == "/lora":
+                if not _require_pipe(pipe) or g is None:
+                    continue
+                tokens = (args[0].split() if args and args[0] else [])
+                if not tokens:
+                    print(f"active loras: {format_stack(g.lora_stack)}")
+                    continue
+                try:
+                    for ln in apply_lora_args(g.lora_stack, tokens, g.spec):
+                        print(ln)
+                except LoraCmdError as e:
+                    print(f"/lora: {e}")
             elif cmd == "/tokenize":
                 if not _require_pipe(pipe) or g is None:
                     continue

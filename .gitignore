@@ -10,6 +10,7 @@ __pycache__/
 # zimt artifacts
 out/
 hf_cache/
+custom/
 .prompt_history
 
 # debug scripts (per CLAUDE.md convention)

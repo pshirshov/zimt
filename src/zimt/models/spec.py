@@ -33,6 +33,22 @@ class ModelSpec:
     ``repo_id`` / ``repo_url`` PNG metadata fields. Empty string means
     "no associated HF repo" (shouldn't happen for any registered model).
     """
+    compatibility_tags: list[str] = field(default_factory=list)
+    """Free-form tags advertised by this base model.
+
+    A :class:`LoraSpec` whose ``compatible_with`` shares at least one tag
+    with this list is considered loadable on top of this pipeline. By
+    convention every entry includes its architecture (``"sdxl"`` /
+    ``"zimage"``) plus narrower fine-tune-family tags such as
+    ``"pony"`` or ``"illustrious"``.
+    """
+    is_builtin: bool = True
+    """``False`` for entries loaded from ``CUSTOM_DIR`` at startup.
+
+    The UI uses this to surface a "remove" affordance only for custom
+    entries — built-ins live in the source tree and can't be deleted
+    from the running server.
+    """
     family: Family = "sdxl"
     """Text-encoder architecture family.
 
@@ -70,3 +86,33 @@ class ModelSpec:
     @property
     def default_w(self) -> int:
         return self.resolutions[0][0]
+
+
+@dataclass
+class LoraSpec:
+    """A LoRA adapter loadable on top of a compatible base pipeline.
+
+    Diffusers loads these via :meth:`load_lora_weights` (with an
+    ``adapter_name``), then :meth:`set_adapters` activates one or more
+    at once with per-adapter weights. The set of currently-active LoRAs
+    is the :class:`zimt.generate.GenConfig` ``lora_stack``.
+    """
+
+    name: str
+    description: str
+    repo_id: str
+    family: Family = "sdxl"
+    compatible_with: list[str] = field(default_factory=list)
+    """Tag set this LoRA needs. Matches against the active base model's
+    :attr:`ModelSpec.compatibility_tags` — any-overlap is sufficient."""
+    weight_name: str = ""
+    """Optional file name inside the repo when the repo carries several
+    LoRA variants. Empty means "let diffusers pick the canonical file"."""
+    default_weight: float = 1.0
+    """Suggested adapter weight when the user doesn't supply one to
+    ``/lora <name>``."""
+    trigger_tags: str = ""
+    """Optional trigger words the LoRA was trained against — surfaced in
+    the UI so the user knows what to put in the prompt to activate it.
+    Not auto-injected (this is a hint, not a side effect)."""
+    is_builtin: bool = True

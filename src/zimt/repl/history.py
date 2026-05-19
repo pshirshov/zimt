@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import readline
 
+from ..models.loras import LORAS
 from ..models.registry import MODELS
 from ..paths import HISTORY_PATH
 from .commands import COMMANDS
@@ -47,6 +48,33 @@ def _sampler_options(tokens: list[str], text: str) -> list[str]:
     return [s for s in opts if s.startswith(text)]
 
 
+def _lora_options(tokens: list[str], text: str) -> list[str]:
+    """LoRA names compatible with the model in this command-line context.
+
+    ``/lora`` is greedy, so ``/lora foo:0.8 ba<TAB>`` should still complete
+    LoRA names. We do that by walking the tokens backwards from the
+    cursor and treating "most recent /cmd is /lora" as the trigger.
+    """
+    base_name = _model_for_context(tokens)
+    base_tags: set[str] = set()
+    if base_name is not None:
+        base_tags = set(MODELS[base_name].compatibility_tags)
+    prefix = text
+    if prefix.startswith("-"):
+        prefix = prefix[1:]
+    if ":" in prefix:
+        # Completing a weight after `name:`; nothing useful to suggest.
+        return []
+    names: list[str] = []
+    for name, spec in LORAS.items():
+        if not name.startswith(prefix):
+            continue
+        if base_tags and not any(t in base_tags for t in spec.compatible_with):
+            continue
+        names.append(name)
+    return sorted(names)
+
+
 def _resolution_options(tokens: list[str], text: str) -> list[str]:
     model = _model_for_context(tokens)
     specs = [MODELS[model]] if model is not None else list(MODELS.values())
@@ -55,6 +83,14 @@ def _resolution_options(tokens: list[str], text: str) -> list[str]:
         for w, h, _label in spec.resolutions:
             seen.add(f"{w}x{h}")
     return [r for r in sorted(seen) if r.startswith(text)]
+
+
+def _most_recent_cmd(tokens: list[str]) -> str | None:
+    """Return the most recent ``/cmd`` token in ``tokens``, if any."""
+    for tok in reversed(tokens):
+        if tok.startswith("/") and tok in COMMANDS:
+            return tok
+    return None
 
 
 def _completion_options(line: str, begidx: int, text: str) -> list[str]:
@@ -70,6 +106,8 @@ def _completion_options(line: str, begidx: int, text: str) -> list[str]:
         return _sampler_options(tokens, text)
     if prev == "/res":
         return _resolution_options(tokens, text)
+    if _most_recent_cmd(tokens) == "/lora":
+        return _lora_options(tokens, text)
     return []
 
 

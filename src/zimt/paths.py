@@ -42,14 +42,29 @@ def _default_static_dir() -> str:
     return os.path.join(PROJECT_ROOT, "static")
 
 
+def _default_custom_dir() -> str:
+    env = os.environ.get("ZIMT_CUSTOM_DIR")
+    if env:
+        return env
+    if PROJECT_ROOT.startswith("/nix/store/"):
+        xdg = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        return os.path.join(xdg, "zimt", "custom")
+    return os.path.join(PROJECT_ROOT, "custom")
+
+
 OUT_DIR: str = _default_out_dir()
 FAV_DIR: str = os.path.join(OUT_DIR, "fav")
 HISTORY_PATH: str = _default_history_path()
 STATIC_DIR: str = _default_static_dir()
+CUSTOM_DIR: str = _default_custom_dir()
+CUSTOM_BASES_DIR: str = os.path.join(CUSTOM_DIR, "bases")
+CUSTOM_LORAS_DIR: str = os.path.join(CUSTOM_DIR, "loras")
 
 
 def ensure_dirs() -> None:
-    """Create OUT_DIR / FAV_DIR / the history dir if missing (idempotent)."""
+    """Create OUT_DIR / FAV_DIR / the history dir + custom dirs if missing."""
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(FAV_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
+    os.makedirs(CUSTOM_BASES_DIR, exist_ok=True)
+    os.makedirs(CUSTOM_LORAS_DIR, exist_ok=True)

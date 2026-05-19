@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..models.loras import LORAS
 from ..models.registry import MODELS
 
 
@@ -45,21 +46,44 @@ def _scan_cache() -> dict[str, dict[str, Any]]:
     return out
 
 
-def models_info() -> list[dict[str, Any]]:
-    """Return one entry per registered model with install status + repo metadata."""
+def _entry_for(name: str, repo_id: str, cache: dict[str, dict[str, Any]],
+               **extra: Any) -> dict[str, Any]:
+    cached = cache.get(repo_id) if repo_id else None
+    return {
+        "name": name,
+        "repo_id": repo_id,
+        "repo_url": f"https://huggingface.co/{repo_id}" if repo_id else "",
+        "installed": cached is not None,
+        "size_bytes": cached["size_bytes"] if cached else 0,
+        "last_modified": cached["last_modified"] if cached else 0.0,
+        **extra,
+    }
+
+
+def models_info() -> dict[str, Any]:
+    """Return ``{bases:[...], loras:[...]}`` with install status + repo metadata."""
     cache = _scan_cache()
-    entries: list[dict[str, Any]] = []
-    for name, spec in MODELS.items():
-        repo_id = spec.repo_id
-        cached = cache.get(repo_id) if repo_id else None
-        entries.append({
-            "name": name,
-            "description": spec.description,
-            "family": spec.family,
-            "repo_id": repo_id,
-            "repo_url": f"https://huggingface.co/{repo_id}" if repo_id else "",
-            "installed": cached is not None,
-            "size_bytes": cached["size_bytes"] if cached else 0,
-            "last_modified": cached["last_modified"] if cached else 0.0,
-        })
-    return entries
+    bases = [
+        _entry_for(
+            name, spec.repo_id, cache,
+            description=spec.description,
+            family=spec.family,
+            compatibility_tags=list(spec.compatibility_tags),
+            is_builtin=spec.is_builtin,
+        )
+        for name, spec in MODELS.items()
+    ]
+    loras = [
+        _entry_for(
+            name, spec.repo_id, cache,
+            description=spec.description,
+            family=spec.family,
+            compatible_with=list(spec.compatible_with),
+            default_weight=spec.default_weight,
+            trigger_tags=spec.trigger_tags,
+            weight_name=spec.weight_name,
+            is_builtin=spec.is_builtin,
+        )
+        for name, spec in LORAS.items()
+    ]
+    return {"bases": bases, "loras": loras}

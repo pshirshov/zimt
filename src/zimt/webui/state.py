@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from ..generate import GenConfig
+from ..models.loras import LORAS
 from ..models.registry import MODELS
 
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
@@ -81,12 +82,23 @@ class AppState:
                  "default_steps": m.default_steps,
                  "default_cfg": m.default_cfg,
                  "default_sampler": m.default_sampler,
+                 "compatibility_tags": list(m.compatibility_tags),
+                 "is_builtin": m.is_builtin,
                  "samplers": sorted(m.samplers),
                  "resolutions": [
                      {"w": w, "h": h, "label": label}
                      for w, h, label in m.resolutions
                  ]}
                 for n, m in MODELS.items()
+            ],
+            "loras": [
+                {"name": n, "description": l.description,
+                 "family": l.family,
+                 "compatible_with": list(l.compatible_with),
+                 "default_weight": l.default_weight,
+                 "trigger_tags": l.trigger_tags,
+                 "is_builtin": l.is_builtin}
+                for n, l in LORAS.items()
             ],
             "settings": {
                 "cfg": self.g.cfg if self.g else None,
@@ -97,6 +109,10 @@ class AppState:
                 "score_tags": self.g.spec.score_tags if self.g else None,
                 "sampler": (self.g.sampler or self.g.spec.default_sampler) if self.g else None,
                 "clip_skip": self.g.clip_skip if self.g else None,
+                "lora_stack": (
+                    [{"name": n, "weight": w} for n, w in self.g.lora_stack]
+                    if self.g else []
+                ),
             },
         }
 

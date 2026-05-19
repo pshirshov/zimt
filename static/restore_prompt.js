@@ -15,6 +15,7 @@
     if (meta.width && meta.height) parts.push(`/size ${meta.width} ${meta.height}`);
     if (meta.negative_prompt != null) parts.push(`/negprompt ${meta.negative_prompt}`);
     if (includeSeed && meta.seed) parts.push(`/seed ${meta.seed}`);
+    if (meta.loras) parts.push(`/lora ${meta.loras.replace(/,/g, " ")}`);
 
     // Use the full composed prompt so restore does not apply score tags twice
     // or drop them when replaying with /raw.

@@ -248,6 +248,10 @@
     font: 12px ui-monospace, monospace; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .recent-item:hover { background: #2e2e38; }
+  .recent-item.showcase { font-style: italic; color: var(--muted); }
+  .recent-item.showcase:hover { color: var(--fg); }
+  .recent-hint { padding: 2px 8px 4px; font: 11px ui-monospace, monospace;
+    color: var(--muted); font-style: italic; }
 
   /* Models tab: one item per registered model. */
   .models-list { list-style: none; padding: 0; margin: 0;
@@ -272,6 +276,25 @@
   .model-actions { display: flex; gap: 6px; align-items: center; justify-self: end; }
   .model-actions .section-btn { font-size: 11px; }
   .model-actions .section-btn:disabled { opacity: 0.45; cursor: default; }
+  .model-item.incompatible { opacity: 0.55; }
+  .model-item.incompatible .model-name { color: var(--muted); }
+  .model-tags { color: var(--muted); font-size: 10px; }
+  .model-trigger { grid-column: 1 / -1; color: #b5d17a; font-size: 11px;
+    font-style: italic; }
+  .model-active-badge { color: var(--accent); font-size: 10px; font-weight: 600;
+    padding: 1px 6px; border: 1px solid var(--accent); border-radius: 10px; }
+  .custom-badge { color: var(--muted); font-size: 10px; padding: 1px 6px;
+    background: #2e2e38; border-radius: 10px; }
+
+  /* Custom add modal: vertically-stacked form fields. */
+  .custom-form { display: flex; flex-direction: column; gap: 8px; }
+  .custom-form label { display: flex; flex-direction: column; gap: 2px;
+    font-size: 11px; color: var(--muted); }
+  .custom-form input, .custom-form select {
+    font: 13px ui-monospace, monospace;
+  }
+  .custom-form-err { color: var(--error); font-size: 12px; min-height: 1em;
+    white-space: pre-wrap; }
 
   .log-line { padding: 4px 8px; background: #25252b; border-radius: 3px;
     margin-top: 4px; font: 12px ui-monospace, monospace; color: var(--muted);

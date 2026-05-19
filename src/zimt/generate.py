@@ -11,7 +11,7 @@ from __future__ import annotations
 import gc
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
@@ -20,6 +20,7 @@ from PIL.PngImagePlugin import PngInfo
 
 from . import ansi
 from .device import DEVICE
+from .models.loras import LORAS
 from .models.spec import ModelSpec
 from .paths import OUT_DIR
 from .samplers import apply_sampler
@@ -47,6 +48,15 @@ class GenConfig:
     clip_skip: int = 0
     """For SDXL only. 0 means "don't pass clip_skip" (diffusers default).
     Pony was trained with clip_skip=2; many SDXL fine-tunes work well there."""
+    lora_stack: list[tuple[str, float]] = field(default_factory=list)
+    """Active LoRA adapters as ``(name, weight)`` pairs.
+
+    ``name`` is a key in :data:`zimt.models.loras.LORAS`. The order is
+    significant only for the UI (insertion order = display order);
+    diffusers blends adapters linearly with the supplied weights.
+    Adapters are lazily loaded on the pipe and activated via
+    ``set_adapters``; an empty stack triggers ``disable_lora``.
+    """
 
 
 def compose_prompt(spec: ModelSpec, raw_prompt: str, *, raw: bool) -> str:
@@ -79,7 +89,56 @@ def _pnginfo(g: GenConfig, full_prompt: str, raw_prompt: str, seed: int) -> PngI
     info.add_text("height", str(g.height))
     info.add_text("dtype", "bfloat16")
     info.add_text("device", DEVICE)
+    if g.lora_stack:
+        info.add_text("loras", ",".join(f"{n}:{w}" for n, w in g.lora_stack))
     return info
+
+
+def _apply_lora_stack(pipe: Any, g: GenConfig) -> None:
+    """Lazily load every adapter in ``g.lora_stack`` then activate the set.
+
+    Diffusers' ``load_lora_weights`` is slow (it materializes the weight
+    deltas into the UNet), so we track which adapter names are already
+    loaded on this pipe via ``pipe._zimt_loras_loaded`` and short-circuit
+    repeats. ``set_adapters`` is cheap by comparison — it just rewrites
+    the blending weights — so we always call it on every generate.
+
+    LoRAs are *pipe-scoped*: a model swap installs a fresh pipe and the
+    loaded set resets implicitly with it. We also cache the last applied
+    stack so we can skip set_adapters when the stack hasn't changed.
+    """
+    if g.spec.family != "sdxl":
+        # ZImagePipeline doesn't currently expose set_adapters; silently
+        # ignore the stack rather than erroring on every generate.
+        return
+    loaded: set[str] = getattr(pipe, "_zimt_loras_loaded", set())
+    for name, _weight in g.lora_stack:
+        if name in loaded:
+            continue
+        spec = LORAS.get(name)
+        if spec is None:
+            raise ValueError(f"unknown lora {name!r}")
+        kwargs: dict[str, Any] = {"adapter_name": name}
+        if spec.weight_name:
+            kwargs["weight_name"] = spec.weight_name
+        pipe.load_lora_weights(spec.repo_id, **kwargs)
+        loaded.add(name)
+    pipe._zimt_loras_loaded = loaded
+
+    desired = tuple(g.lora_stack)
+    if getattr(pipe, "_zimt_lora_active", None) == desired:
+        return
+    if desired:
+        pipe.set_adapters(
+            [n for n, _ in desired], adapter_weights=[w for _, w in desired],
+        )
+    else:
+        try:
+            pipe.disable_lora()
+        except Exception:
+            # Some pipelines no-op disable_lora when nothing's loaded; fine.
+            pass
+    pipe._zimt_lora_active = desired
 
 
 def _ensure_sampler(pipe: Any, g: GenConfig) -> None:
@@ -146,6 +205,7 @@ def generate(
     print(f"{ansi.DIM}negative:{ansi.RESET} {neg!r}")
 
     _ensure_sampler(pipe, g)
+    _apply_lora_stack(pipe, g)
 
     extra: dict[str, Any] = {}
 

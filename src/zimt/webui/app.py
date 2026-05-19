@@ -42,12 +42,16 @@ from ..paths import FAV_DIR, OUT_DIR, STATIC_DIR, ensure_dirs
 from .downloads import install as install_download_hook
 from .exec_api import ExecBody, api_exec as exec_handler
 from .loader import ModelLoadError, load_model
+from ..models.custom import (
+    CustomDescriptorError, delete_custom, reload_custom_into_registries,
+    write_custom,
+)
 from .models_info import models_info
 from .outputs import list_outputs, read_png_meta, resolve_output, safe_name
 from .prefetch import PrefetchError, prefetch_model
 from .rpc import dispatch, method, rpc_error
 from .state import CANCEL_EVENTS, EXECUTOR, STATE
-from .ws import broadcast, emit_job
+from .ws import broadcast, emit_job, emit_state
 
 app = FastAPI()
 
@@ -175,6 +179,13 @@ async def _on_startup() -> None:
     # this point on. Capture the running loop so the tqdm subclass (which
     # is called from a worker thread) can schedule WS broadcasts here.
     install_download_hook(asyncio.get_running_loop())
+    # Load user-supplied LoRA / base descriptors from disk.
+    report = reload_custom_into_registries()
+    if report["errors"]:
+        for err in report["errors"]:
+            print(f"zimt: custom descriptor error: {err}")
+    if report["bases"] or report["loras"]:
+        print(f"zimt: loaded custom bases={report['bases']} loras={report['loras']}")
     asyncio.create_task(_gpu_stats_loop())
 
 
@@ -230,7 +241,7 @@ async def _rpc_model_switch(params: dict[str, Any]) -> dict[str, Any]:
 
 @method("models_info")
 async def _rpc_models_info(_params: dict[str, Any]) -> dict[str, Any]:
-    return {"models": models_info()}
+    return models_info()
 
 
 @method("model_download")
@@ -238,11 +249,48 @@ async def _rpc_model_download(params: dict[str, Any]) -> dict[str, Any]:
     name = params.get("name")
     if not isinstance(name, str):
         raise rpc_error("missing model name")
+    kind = params.get("kind", "base")
+    if kind not in ("base", "lora"):
+        raise rpc_error("kind must be 'base' or 'lora'")
     try:
-        job_id = await prefetch_model(name)
+        job_id = await prefetch_model(name, kind=kind)
     except PrefetchError as e:
         raise rpc_error(str(e))
     return {"job_id": job_id}
+
+
+@method("custom_add")
+async def _rpc_custom_add(params: dict[str, Any]) -> dict[str, Any]:
+    kind = params.get("kind")
+    descriptor = params.get("descriptor")
+    if kind not in ("base", "lora"):
+        raise rpc_error("kind must be 'base' or 'lora'")
+    if not isinstance(descriptor, dict):
+        raise rpc_error("descriptor must be an object")
+    try:
+        write_custom(kind, descriptor)
+        report = reload_custom_into_registries()
+    except CustomDescriptorError as e:
+        raise rpc_error(str(e))
+    await broadcast({"type": "registries_changed"})
+    await emit_state()
+    return {"loaded": report}
+
+
+@method("custom_remove")
+async def _rpc_custom_remove(params: dict[str, Any]) -> dict[str, Any]:
+    kind = params.get("kind")
+    name = params.get("name")
+    if kind not in ("base", "lora") or not isinstance(name, str):
+        raise rpc_error("need kind=base|lora and name")
+    try:
+        delete_custom(kind, name)
+        report = reload_custom_into_registries()
+    except CustomDescriptorError as e:
+        raise rpc_error(str(e))
+    await broadcast({"type": "registries_changed"})
+    await emit_state()
+    return {"loaded": report}
 
 
 @method("exec")

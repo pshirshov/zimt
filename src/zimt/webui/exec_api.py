@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from ..buckets import parse_res
+from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
 from ..models.registry import MODELS
 from ..repl.commands import parse_commands
 from .jobs import run_job
@@ -192,6 +193,7 @@ _HELP_LINES = [
     "  /sampler <name>        switch scheduler (model-specific)",
     "  /clip_skip N           SDXL only — skip top N CLIP layers (0=off)",
     "  /model <name>          load a model",
+    "  /lora …                add/remove LoRAs (name, name:0.8, -name, -)",
     "  /tokenize <text>       show per-encoder token analysis",
     "multiple commands may be combined on one line, e.g.",
     "  /model pony-v6-xl /cfg 5 /steps 25 cute anime girl",
@@ -255,6 +257,26 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
                     log.append("/many: N must be 1..256")
             except (ValueError, IndexError):
                 log.append("/many: expected N <prompt>")
+        elif cmd == "/lora":
+            if not await _need_pipe("/lora", log):
+                continue
+            assert STATE.g is not None
+            tokens = (args[0].split() if args and args[0] else [])
+            if not tokens:
+                msg = f"active loras: {format_stack(STATE.g.lora_stack)}"
+                log.append(msg)
+                await emit_log(msg)
+                continue
+            try:
+                messages = apply_lora_args(STATE.g.lora_stack, tokens, STATE.g.spec)
+            except LoraCmdError as e:
+                log.append(f"/lora: {e}")
+                await emit_log(f"/lora: {e}", level="error")
+                continue
+            for ln in messages:
+                log.append(ln)
+                await emit_log(ln)
+            await emit_state()
         elif cmd == "/tokenize":
             if not await _need_pipe("/tokenize", log):
                 continue

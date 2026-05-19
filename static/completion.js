@@ -3,7 +3,7 @@
 
   const COMMANDS = [
     "/help", "/?", "/raw", "/many", "/seed", "/negprompt", "/cfg", "/steps",
-    "/size", "/res", "/sampler", "/clip_skip", "/model", "/tokenize",
+    "/size", "/res", "/sampler", "/clip_skip", "/model", "/lora", "/tokenize",
     "/quit", "/exit", "/q",
   ].sort();
 
@@ -23,6 +23,7 @@
     "/sampler": "switch scheduler",
     "/clip_skip": "SDXL only; skip top N CLIP layers",
     "/model": "load a model",
+    "/lora": "add/remove LoRAs (name | name:0.8 | -name | -)",
     "/tokenize": "per-encoder token analysis",
     "/negprompt": "set/clear negative prompt",
   };
@@ -62,6 +63,34 @@
       return models
         .filter((m) => m.name.toLowerCase().startsWith(lower))
         .map((m) => ({ label: m.name, desc: m.description }));
+    }
+
+    // /lora is greedy — every subsequent token until the next /cmd is a
+    // LoRA-name argument. Walk back to find the most-recent /cmd; if it's
+    // /lora, complete LoRA names filtered by compatibility with the
+    // active base model (or the most recent /model arg in this line).
+    const knownCmds = new Set(COMMANDS);
+    let mostRecentCmd = null;
+    for (let i = before.length - 1; i >= 0; i -= 1) {
+      if (knownCmds.has(before[i])) { mostRecentCmd = before[i]; break; }
+    }
+    if (mostRecentCmd === "/lora") {
+      const loras = appState?.loras ?? [];
+      const base = modelForContext(before, appState);
+      const baseTags = new Set(base?.compatibility_tags ?? []);
+      let core = lower;
+      if (core.startsWith("-")) core = core.slice(1);
+      if (core.includes(":")) return [];   // user typing a weight
+      return loras
+        .filter((l) => l.name.toLowerCase().startsWith(core))
+        .filter((l) => {
+          if (!baseTags.size) return true;
+          return (l.compatible_with || []).some((t) => baseTags.has(t));
+        })
+        .map((l) => ({
+          label: l.name,
+          desc: l.trigger_tags ? `trigger: ${l.trigger_tags}` : l.description,
+        }));
     }
 
     if (prev === "/sampler") {

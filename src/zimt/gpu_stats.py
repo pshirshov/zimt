@@ -106,10 +106,19 @@ def _cuda_stats() -> GpuStats | None:
 
 def _cpu_stats() -> GpuStats:
     # Last-resort: report the python process RSS so the bar isn't blank.
+    # Read /proc/self/status directly — the systemd unit's locked-down
+    # PATH (and ProtectSystem hardening) means external tools like
+    # ``ps`` may not be available, and the previous popen-based fetch
+    # spammed the journal with ``ps: command not found``.
     rss = 0
     try:
-        rss = int(os.popen(f"ps -o rss= -p {os.getpid()}").read().strip()) * 1024
-    except Exception:
+        with open("/proc/self/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    # ``VmRSS:       12345 kB``
+                    rss = int(line.split()[1]) * 1024
+                    break
+    except OSError:
         pass
     return GpuStats(
         backend="cpu",

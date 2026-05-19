@@ -17,6 +17,10 @@
 , makeWrapper
 , fetchurl
 , fetchFromGitHub
+, stdenv
+, autoPatchelfHook
+, unzip
+, zlib
 , zimtSrc
 , backend ? "xpu"
 
@@ -98,12 +102,14 @@ let
                         diffusersFromGit diffusersFromGit
                         diffusersFromGit diffusersFromGit;
 
-  # XPU-only wheel set: torch+xpu, torchvision+xpu, triton-xpu, Intel runtime.
+  # XPU-only wheel set: torch+xpu, torchvision+xpu, triton-xpu, Intel
+  # runtime. Returned as a single-element list (one combined derivation
+  # containing every wheel unpacked into a unified prefix) — see
+  # ``./wheels-xpu.nix`` for why a single derivation is needed.
   xpuWheels =
     if backend == "xpu"
     then import (./. + "/wheels-xpu.nix") {
-      inherit python fetchurl;
-      inherit (pyPkgs) buildPythonPackage;
+      inherit python fetchurl lib stdenv autoPatchelfHook unzip zlib;
     }
     else [];
 

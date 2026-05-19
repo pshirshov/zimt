@@ -165,10 +165,11 @@ runCommand "zimt-${backend}-${python.version}" {
   # and easy to override.
   cp -r ${src}/src/zimt $out/lib/python/zimt
 
-  # static/ must sit next to the python module so paths.py:STATIC_DIR
-  # resolves correctly (`PROJECT_ROOT/static` where PROJECT_ROOT computes to
-  # the parent of the zimt package, ie $out/lib/python here).
-  cp -r ${src}/static $out/lib/python/static
+  # paths.py computes ``PROJECT_ROOT = dirname(__file__)/../..`` which from
+  # ``$out/lib/python/zimt/paths.py`` resolves to ``$out/lib/``. STATIC_DIR
+  # is then ``$out/lib/static`` — keep this in sync with paths.py if the
+  # python module's install depth changes.
+  cp -r ${src}/static $out/lib/static
 
   makeWrapper ${pythonEnv}/bin/python3 $out/bin/zimt \
     --add-flags "-m zimt" \

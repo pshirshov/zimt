@@ -47,6 +47,14 @@
 , zlib
 }:
 
+# torch+xpu pulls a small set of pure-python deps via its wheel metadata
+# (sympy, networkx, jinja2, filelock, typing-extensions, fsspec,
+# setuptools). pip would normally install those automatically; nix
+# bypasses pip's metadata so we wire them in explicitly as
+# ``propagatedBuildInputs`` of the combined runtime — that's enough for
+# ``python.withPackages`` to pull them into the final env. Numpy /
+# pillow (torchvision's deps) are already declared in package.nix.
+
 let
   fakeHash = lib.fakeHash;
   sitePackagesRel = python.sitePackages;
@@ -191,6 +199,19 @@ let
     # libstdc++ / libgcc_s come from stdenv.cc.cc.lib; zlib is a frequent
     # transitive dep of the Intel runtime libs (pti, mkl).
     buildInputs = [ stdenv.cc.cc.lib zlib ];
+
+    # Python deps declared by the torch wheel METADATA — see header
+    # comment. Without these, ``import torch._dynamo`` fails because
+    # ``torch.fx.experimental.symbolic_shapes`` imports sympy.
+    propagatedBuildInputs = with python.pkgs; [
+      filelock
+      typing-extensions
+      setuptools
+      sympy
+      networkx
+      jinja2
+      fsspec
+    ];
 
     dontUnpack = true;
     dontConfigure = true;

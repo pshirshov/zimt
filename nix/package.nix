@@ -179,5 +179,7 @@ runCommand "zimt-${backend}-${python.version}" {
     --add-flags "-m zimt" \
     --set PYTHONPATH "$out/lib/python" \
     --set ZIMT_BACKEND "${backend}" \
-    --set ZIMT_DEVICE "${deviceEnv}"
+    --set ZIMT_DEVICE "${deviceEnv}" ${lib.optionalString (backend == "xpu") ''\
+    --prefix LD_LIBRARY_PATH : "/run/opengl-driver/lib" \
+    --set-default OCL_ICD_VENDORS "/run/opengl-driver/etc/OpenCL/vendors"''}
 ''

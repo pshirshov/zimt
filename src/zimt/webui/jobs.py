@@ -99,7 +99,9 @@ async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool,
             return
         except Exception as e:
             job.status = "error"
-            job.error = repr(e)
+            # class-name + message; repr(e) would render as
+            # "RuntimeError('CUDA out of memory')" which the UI surfaces verbatim.
+            job.error = f"{type(e).__name__}: {e}"
             job.ts_done = datetime.now().timestamp()
             CANCEL_EVENTS.pop(job.id, None)
             await emit_job(job)

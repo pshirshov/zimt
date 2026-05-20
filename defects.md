@@ -174,7 +174,7 @@ Net production effects:
 ## PR-07
 
 ## [PR-07-D01] LoaderTests.test_failed_load_clears_stale_config_and_same_model_reloads expects HTTPException but load_model raises ModelLoadError
-**Status:** open
+**Status:** resolved
 **Severity:** major
 **Location:** `tests/test_webui_service.py:80` (`with self.assertRaises(HTTPException)`), `src/zimt/webui/loader.py:142` (`raise ModelLoadError(repr(e)) from e`).
 **Description:** Pre-existing test failure carried through PR-01..PR-06 and PR-12. The test asserts `HTTPException` is raised when `_do_load_sync` fails, but `loader.load_model` raises `ModelLoadError` instead. `HTTPException` is only constructed at the RPC boundary (`app.py:238` — `raise rpc_error(str(e))` for `ModelLoadError`), so the test is exercising the wrong layer. `python -m unittest discover -s tests` consistently reports this as the single failing test out of the M1 suite. Either the test should be rewritten to call the RPC handler `web_app._rpc_model_switch` and assert that it raises `_RpcError`/the WS-layer equivalent, or the test should assert `ModelLoadError` directly. The current assertion has been failing for the entire review-loop programme.
@@ -190,7 +190,7 @@ Net production effects:
 **Suggested fix:** `src/zimt/webui/downloads.py:246` — rewrite to `setattr(hf_tqdm_mod, "tqdm", ProgressTqdm)` to match the pattern already used at L256. Pyright accepts the `setattr` form for arbitrary modules. Verify with `nix develop --command pyright src/zimt` and expect 0 errors.
 
 ## [PR-07-D03] STATE.loading_model check-then-set across an await in loader.load_model permits two concurrent loads to race past the gate
-**Status:** open
+**Status:** resolved
 **Severity:** major
 **Location:** `src/zimt/webui/loader.py:69-84` (`while STATE.loading_model is not None: await asyncio.sleep(0.25)` followed by `STATE.jobs[job.id] = job; STATE.loading_model = name`).
 **Description:** Two concurrent `load_model("A")` and `load_model("B")` calls observe `STATE.loading_model is None` at the top, enter the while-loop, find it None again, and both proceed to create download Jobs and both set `STATE.loading_model`. The second assignment overwrites the first. Both subsequently `async with PIPE_LOCK:` serializes the actual `_do_load_sync` calls, so the load operations themselves don't corrupt each other — but `STATE.loading_model` is now "B" while "A" is also running; the model-state pill displays only "loading B", and the user's "A" job is hidden from the UI's loading affordance. The race is also reachable by an RPC pattern where a `/model A` exec is in flight and the user issues a second `/model B` before `load_model("A")` reaches `STATE.loading_model = name`. The check at L65 (`already loaded`) protects against same-model double-load but does not serialize different-model attempts.
@@ -229,7 +229,7 @@ try:
 Backend test: create a symlink in a temp OUT_DIR pointing to a sentinel file outside OUT_DIR, invoke `_rpc_outputs_cleanup`, assert sentinel still exists and the symlink entry was skipped.
 
 ## [PR-07-D05] Background tasks created with asyncio.create_task are not retained and are vulnerable to GC mid-run
-**Status:** open
+**Status:** resolved
 **Severity:** major
 **Location:** `src/zimt/webui/app.py:189` (`_gpu_stats_loop`), `src/zimt/webui/app.py:482` (per-ping `_watchdog`), `src/zimt/webui/app.py:526` (per-request `dispatch`), `src/zimt/webui/prefetch.py:146` (`_run()` task).
 **Description:** Python's `asyncio.create_task` returns a `Task` whose only strong reference is the asyncio event loop's internal `_running_tasks` set — but CPython's implementation has historically warned that "If the application does not keep a reference to the task, it may be garbage collected at any time, even before it's done." (See `asyncio.create_task` docs, CPython 3.13.) Concrete consequences observed in the codebase: (a) `_gpu_stats_loop` is spawned once at startup; under memory pressure or during a GC cycle, the loop could be cancelled, silently terminating GPU stats updates. (b) `prefetch._run()` is spawned per download; if the asyncio loop's scheduler queue is congested, the task could be GC'd between `create_task` and its first `await async with _PREFETCH_LOCK:` execution — the download would never start, the job would stay queued forever, and the user would see "starting…" indefinitely. (c) Per-request `dispatch` tasks (L526) outlive the WS connection if the RPC handler is slow; the task continues sending to a closed socket (rpc.py's `_send` swallows the error). The watchdog (L482) is bounded by `PONG_TIMEOUT_S` so its GC risk is small.
@@ -253,7 +253,7 @@ Replace every `asyncio.create_task(...)` in `app.py`, `prefetch.py`, and `exec_a
 **Suggested fix:** `src/zimt/webui/app.py:85-93` — split the check by request type. For the `/ws` handshake and any RPC-bearing HTTP, require an Origin header. For the initial `GET /` and `/static/*` paths, allow missing Origin (a browser doesn't send Origin for top-level navigations). Concretely: extend `_request_permitted` to take a `require_origin: bool` flag and pass `True` from `ws_endpoint` and any RPC handler. Update tests `AuthTests.test_origin_must_match_host_unless_allow_list_is_set` to cover the missing-Origin → reject case for RPC.
 
 ## [PR-07-D07] _graceful_shutdown drains EXECUTOR but not _PREFETCH_EXECUTOR
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/app.py:192-208` (`_graceful_shutdown`), `src/zimt/webui/prefetch.py:35` (`_PREFETCH_EXECUTOR`).
 **Description:** SIGTERM handler sets every cancel event and calls `EXECUTOR.shutdown(wait=True, cancel_futures=True)`. `EXECUTOR` is the inference executor (state.py:29). The prefetch executor (`_PREFETCH_EXECUTOR` in prefetch.py:35) is a separate `ThreadPoolExecutor` and is **not** drained. A prefetch in flight during a systemd `TimeoutStopSec` will be SIGKILLed mid-`snapshot_download`, leaving partial files in the HF cache. HF's cache layout uses `.incomplete` suffixes for in-progress downloads which it normally cleans up on the next download attempt, so the post-mortem state is recoverable — but the in-flight Job's cancel event is set with no opportunity for the worker to honor it.
@@ -261,7 +261,7 @@ Replace every `asyncio.create_task(...)` in `app.py`, `prefetch.py`, and `exec_a
 **Suggested fix:** `src/zimt/webui/app.py:207` — add `from .prefetch import _PREFETCH_EXECUTOR` and call `_PREFETCH_EXECUTOR.shutdown(wait=True, cancel_futures=True)` immediately after the existing `EXECUTOR.shutdown(...)`. Document in `prefetch.py` that callers must not retain executor references that survive the shutdown.
 
 ## [PR-07-D08] dataclasses.replace(STATE.g) shares the lora_stack list reference with the live config
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/exec_api.py:325` (`g_snapshot = replace(STATE.g)`), `src/zimt/generate.py:64` (`lora_stack: list[tuple[str, float]] = field(default_factory=list)`).
 **Description:** `dataclasses.replace(obj)` is a shallow copy — it constructs a new instance with the same field values. For mutable fields like `lora_stack: list[tuple[str, float]]`, the new instance holds a reference to the **same list**. The intent of the snapshot pattern (PR-01 / cross-cutting note) is that a `/lora` issued between enqueue and run does not affect the in-flight job. Today: enqueue captures `g_snapshot` with `g_snapshot.lora_stack is STATE.g.lora_stack`. A subsequent `/lora foo` mutates the list in place via `apply_lora_args`, and the in-flight job sees the mutation. The job then runs with the wrong adapter set. The test `ExecValidationTests.test_generation_receives_config_snapshot_from_enqueue_time` checks `steps` and `cfg` (scalar fields) but does not exercise `lora_stack` — the defect is uncovered.
@@ -275,7 +275,7 @@ async def test_generation_snapshot_isolates_lora_stack_from_post_enqueue_mutatio
 ```
 
 ## [PR-07-D09] jobs.run_job reports UninstalledLoraError as str(e) but other exceptions as repr(e), so a useful pipeline error message is hidden behind RuntimeError(…)
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/jobs.py:93-99` (`except UninstalledLoraError as e: job.error = str(e)`), `src/zimt/webui/jobs.py:100-106` (`except Exception as e: job.error = repr(e)`).
 **Description:** PR-05 added a dedicated branch for `UninstalledLoraError` that formats the error as the plain message (`str(e)`) so the UI shows "LoRA(s) not installed: …" cleanly. Every other pipeline error falls through to the generic catch which formats as `repr(e)`. A diffusers error like `RuntimeError("CUDA out of memory")` becomes `"RuntimeError('CUDA out of memory')"` in `job.error`. The user reads the noise rather than the message. The same pattern exists in `loader.py:137` (`job.error = repr(e)`). The frontend error popup at `app.js:345-349` simply prints `job.error` verbatim, so the user-facing text inherits the repr-vs-str inconsistency.
@@ -283,7 +283,7 @@ async def test_generation_snapshot_isolates_lora_stack_from_post_enqueue_mutatio
 **Suggested fix:** `src/zimt/webui/jobs.py:100-106` — change `job.error = repr(e)` to `job.error = f"{type(e).__name__}: {e}"` (class name + message, no quote-doubling). Same change at `loader.py:137`. The class-name prefix preserves the diagnostic info the original `repr(e)` carried, but renders the message readably. Update any test that pattern-matches on `repr(e)` formatting.
 
 ## [PR-07-D10] ProgressTqdm worker thread writes job.download_n / download_total / download_unit independently from the asyncio reader, allowing torn snapshots
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/downloads.py:230-243` (`_emit` body), `src/zimt/webui/ws.py:35-36` (`emit_job` reads via `asdict(job)`).
 **Description:** The tqdm worker thread mutates `job.download_file`, `job.download_unit`, `job.download_n`, `job.download_total`, `job.download_files_done` as separate Python attribute assignments. Between any two assignments, the asyncio loop can run an `emit_job(job)` (scheduled via `_schedule_emit` for a *previous* tqdm event) and read a partially-updated Job — e.g., `download_unit = "files"` (newly set) with `download_n = 95_232` and `download_total = 100_000` (stale byte-bar values from the previous emit). The frontend then formats `"95232 / 100000 files"`, which is gibberish. The GIL guarantees individual `setattr` is atomic but provides no multi-field consistency. Empirically the window is microsecond-scale, so frequency of observation depends on tqdm event rate. During a heavy snapshot with both file and byte bars firing, the bar-flicker PR-04 documented likely interacts with this — the visible "flicker" may not be only between unit categories but also between consistent and torn snapshots.
@@ -291,7 +291,7 @@ async def test_generation_snapshot_isolates_lora_stack_from_post_enqueue_mutatio
 **Suggested fix:** introduce a per-Job `threading.Lock` (or a single module-level `_progress_lock = threading.Lock()` since at most one tqdm bar emits at a time per slot owner) and hold it across the field updates in `_emit` and around `asdict(job)` calls in `emit_job` when the job is `kind == "download"`. Alternative: replace the four scalar fields with a single `download_progress: ProgressSnapshot` dataclass that is atomically swapped under the lock, then `asdict` only sees consistent snapshots. Backend regression: spin up a tight loop that drives `ProgressTqdm.update` from a worker thread while another thread runs `asdict(job)` 10⁶ times; assert no snapshot has `unit == "files"` with `total > 99` (the byte-bar's total).
 
 ## [PR-07-D11] ws.broadcast crashes the whole broadcast loop on a non-JSON-serializable event payload rather than skipping the bad event
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/ws.py:19-28` (`broadcast`).
 **Description:** `broadcast` calls `payload = json.dumps(event)` once at the top, then loops over `STATE.clients`. The `except Exception` (L25) catches `ws.send_text` errors per-client. But `json.dumps(event)` is outside the try and outside the loop — if a caller passes an event whose `event["state"]` includes a non-serializable value (e.g., a `datetime` object, a `Path`, a numpy scalar), `json.dumps` raises `TypeError`, the call returns to the awaiting coroutine with an unhandled exception, and the broadcast fails for every client at once. There's no per-event isolation: a single bad `emit_state()` call would tear down the message stream for the entire session. The likelihood of hitting this in production is low (today's `state_dict()` only contains JSON-safe primitives), but every new field added to `Job` or `AppState` is one more chance to introduce a non-serializable value. The defect is also a regression-detection concern: adding a `datetime` field to `Job` would crash `emit_job` and the test suite would have to catch the exception via the broadcast path.
@@ -309,7 +309,7 @@ async def broadcast(event: dict[str, Any]) -> None:
 The `default=str` argument turns non-serializable values into their `str()` form rather than crashing — defensive enough that we don't need to chase every type that ends up in an event. Backend test: pass a `dataclass` field of type `set[int]` and assert the broadcast returns without raising.
 
 ## [PR-07-D12] PIPE_LOCK (asyncio.Lock) has the same cross-loop binding hazard as _PREFETCH_LOCK
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/state.py:30` (`PIPE_LOCK = asyncio.Lock()`), `src/zimt/webui/jobs.py:48` (`async with PIPE_LOCK:`), `src/zimt/webui/loader.py:105` (`async with PIPE_LOCK:`).
 **Description:** PR-06-D02 closed the cross-loop binding bug for `_PREFETCH_LOCK` by adding `setattr(prefetch._PREFETCH_LOCK, "_loop", None)` to `StateCase.setUp`. `PIPE_LOCK` has the same shape (module-global `asyncio.Lock`) but is not reset between tests. Today no `IsolatedAsyncioTestCase` test contends `PIPE_LOCK` from inside its body (the `LoaderTests.test_failed_load_…` test patches `_do_load_sync` to a sync function so the lock is only acquired briefly), so the bug is latent. The first test that genuinely contends `PIPE_LOCK` across two test methods will fail with `RuntimeError: <Lock [locked]> is bound to a different event loop`. The fix is mechanical and cheap; the only reason it isn't done is that no test has needed it yet.
@@ -317,7 +317,7 @@ The `default=str` argument turns non-serializable values into their `str()` form
 **Suggested fix:** `tests/test_webui_service.py:51-55` — add `setattr(jobs_mod.PIPE_LOCK, "_loop", None)` next to the existing `_PREFETCH_LOCK._loop` reset in `StateCase.setUp`. Use `jobs_mod` (already imported) to reach the lock object. No production code change required — this is purely test-infrastructure hardening.
 
 ## [PR-07-D13] is_installed runs a full scan_cache_dir on every generation via _apply_lora_stack
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/models_info.py:23-46` (`_scan_cache`), `src/zimt/webui/models_info.py:49-59` (`is_installed`), `src/zimt/generate.py:127-139` (`_apply_lora_stack` calls `is_installed` per LoRA in stack).
 **Description:** `_apply_lora_stack` calls `is_installed(spec.repo_id)` once per LoRA in `g.lora_stack` (L136), and `is_installed` calls `_scan_cache()` which invokes `huggingface_hub.scan_cache_dir()` — a full walk of every cached repo's blob directory tree, stat()'ing every file. PR-05's notes acknowledge "few ms per repo" — for an HF cache with a dozen large models, this is in the 100-500 ms range. Every image generation pays this cost before the pipeline starts, multiplied by the number of LoRAs in the stack. For a `/many 16` invocation with a 3-LoRA stack, that's 16 × 3 = 48 cache scans for what is fundamentally the same answer (the cache state can't change between two generations in the same call). The PR-05 notes explicitly call out "No in-process caching was added because cache state can change between calls (a parallel prefetch can install a LoRA mid-session)" — true, but the *per-generation* call could safely cache for the duration of a single `run_job` invocation.
@@ -432,4 +432,29 @@ GCC_LIB=$(nix eval --raw nixpkgs#gcc.cc.lib.outPath 2>/dev/null)/lib
 export LD_LIBRARY_PATH="${GCC_LIB:+$GCC_LIB:}/run/opengl-driver/lib"
 ```
 Or — preferred for the dev shell — move the export into the flake's `devShells.default.shellHook` so it tracks the same nixpkgs revision as the rest of the dev environment. Either approach removes the hash literal from the source tree.
+
+---
+
+## PR-08
+
+## [PR-08-D01] ConcurrentLoadGateTests does not exercise the race that LOADING_LOCK exists to prevent
+**Status:** resolved
+**Severity:** minor
+**Location:** `tests/test_webui_service.py` — `ConcurrentLoadGateTests`.
+**Description:** The PR-08 regression test for PR-07-D03 (LOADING_LOCK) starts task T2 only after T1 has crossed the gate and set `STATE.loading_model = "z-image-turbo"`. T2 then parks in the pre-existing `while STATE.loading_model is not None: await asyncio.sleep(0.25)` polling loop — that polling existed before the lock was added. The actual race `LOADING_LOCK` prevents is two coroutines both INSIDE the polling loop at the moment `loading_model` flips to None: both observe None on the same scheduler tick, both exit the loop, both proceed to assign. The test never sets up that initial state, so it would pass even if `async with LOADING_LOCK:` were deleted. The fix itself is correct; only the test coverage is incomplete.
+**Suggested fix:** restructure the test so a third holder coroutine first parks `STATE.loading_model = "..."`; then T1 and T2 are spawned (both park in the polling loop); the holder is released; after release, assert exactly one of T1/T2 enters `running` before the other sees `STATE.loading_model is not None` again.
+
+## [PR-08-D02] loader.load_model still formats job.error as repr(e) — asymmetric with the jobs.run_job fix from PR-07-D09
+**Status:** resolved
+**Severity:** minor
+**Location:** `src/zimt/webui/loader.py:141` and the model_error broadcast at `:144`.
+**Description:** PR-08's D09 fix changed `jobs.run_job`'s generic-exception path to `job.error = f"{type(e).__name__}: {e}"`. `loader.load_model`'s `except Exception as e:` branch still writes `job.error = repr(e)` and broadcasts `{"type": "model_error", "error": repr(e)}`. Both code paths write into the same `Job.error` field that the UI consumes uniformly. A generation failure renders as `"ValueError: foo"`; a base-model load failure renders as `"ValueError('foo')"`. The user-visible inconsistency persists.
+**Suggested fix:** change the two `repr(e)` formats in `loader.py` to `f"{type(e).__name__}: {e}"`.
+
+## [PR-08-D03] models_info cache invalidation does not cover successful base-model loads, and TTL-expiry is untested
+**Status:** resolved
+**Severity:** minor
+**Location:** `src/zimt/webui/models_info.py` (TTL cache), `src/zimt/webui/loader.py::load_model` (missing invalidation), `tests/test_webui_service.py::ModelsInfoCacheTests` (no expiry test).
+**Description:** PR-08's D13 fix invalidates the HF-cache scan in `prefetch.prefetch_model` on successful prefetch but NOT in `loader.load_model` on successful base-model load (which also populates the HF cache via diffusers `from_pretrained`). Result: `is_installed(base_repo)` returns False for up to `_CACHE_TTL_S = 1.0`s after a base load lands. Also, the regression test only proves cache reuse inside the TTL window; it does NOT advance `time.monotonic` past TTL or exercise `_invalidate_cache()`, so a regression pinning the TTL to infinity would be undetected.
+**Suggested fix:** in `loader.load_model`, after the executor returns successfully (right before `job.status = "done"`), call `models_info._invalidate_cache()`. In `ModelsInfoCacheTests`, add (a) `test_is_installed_re_scans_after_ttl_expires` monkeypatching `time.monotonic`, and (b) `test_is_installed_re_scans_after_explicit_invalidate` calling `_invalidate_cache()` between two scans.
 

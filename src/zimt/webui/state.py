@@ -28,7 +28,25 @@ from ..models.registry import MODELS
 
 EXECUTOR = ThreadPoolExecutor(max_workers=1)
 PIPE_LOCK = asyncio.Lock()
+# Serializes the STATE.loading_model check-and-set in loader.load_model.
+# Without this, two concurrent load_model() coroutines can both observe
+# loading_model is None and both proceed past the gate, racing past the
+# single-loader invariant.
+LOADING_LOCK = asyncio.Lock()
 CANCEL_EVENTS: dict[str, threading.Event] = {}
+
+# Strong references for asyncio.create_task fire-and-forget background work.
+# Python's asyncio docs note that tasks must be retained or they may be GC'd
+# mid-run; route every long-lived create_task through register_task().
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def register_task(coro: Any) -> asyncio.Task[Any]:
+    """Schedule ``coro`` and retain a strong reference until it completes."""
+    t = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(t)
+    t.add_done_callback(_BACKGROUND_TASKS.discard)
+    return t
 
 
 @dataclass

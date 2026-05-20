@@ -220,27 +220,31 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
                 _schedule_emit(job)
 
         def _emit(self) -> None:
+            # Hold _active_lock across both the ownership check and the
+            # field writes so a concurrent emit_job(asdict(job)) (which
+            # also acquires _active_lock for download jobs) cannot read
+            # a torn snapshot (e.g. unit='files' with bytes-bar n/total).
             with _active_lock:
                 jid = _active_job_id
-            if jid is None or jid != getattr(self, "_zimt_owner", None):
-                return
-            job = STATE.jobs.get(jid)
-            if job is None or job.kind != "download":
-                return
-            desc = (getattr(self, "desc", "") or "").strip()
-            job.download_file = desc or job.download_file
-            cat = _classify(getattr(self, "unit", "") or "", desc)
-            job.download_unit = cat
-            try:
-                job.download_n = int(self.n or 0)
-                job.download_total = int(self.total or 0)
-            except (TypeError, ValueError):
-                pass
-            if cat == "files":
+                if jid is None or jid != getattr(self, "_zimt_owner", None):
+                    return
+                job = STATE.jobs.get(jid)
+                if job is None or job.kind != "download":
+                    return
+                desc = (getattr(self, "desc", "") or "").strip()
+                job.download_file = desc or job.download_file
+                cat = _classify(getattr(self, "unit", "") or "", desc)
+                job.download_unit = cat
                 try:
-                    job.download_files_done = int(self.n or 0)
+                    job.download_n = int(self.n or 0)
+                    job.download_total = int(self.total or 0)
                 except (TypeError, ValueError):
                     pass
+                if cat == "files":
+                    try:
+                        job.download_files_done = int(self.n or 0)
+                    except (TypeError, ValueError):
+                        pass
             _schedule_emit(job)
 
     hf_tqdm_mod.tqdm = ProgressTqdm

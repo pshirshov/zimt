@@ -29,7 +29,7 @@ from ..models.registry import MODELS
 from .downloads import (
     DownloadCanceled, clear_active_download, download_context, set_active_download,
 )
-from .state import CANCEL_EVENTS, Job, STATE
+from .state import CANCEL_EVENTS, Job, STATE, register_task
 from .ws import broadcast, emit_job, emit_log
 
 _PREFETCH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="zimt-prefetch")
@@ -120,6 +120,11 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
                         _PREFETCH_EXECUTOR,
                         lambda: ctx.run(_snapshot_download_sync, repo_id),
                     )
+                # Drop the install-status cache so is_installed picks up
+                # the new repo on the next generation without waiting for
+                # the TTL window to elapse.
+                from .models_info import _invalidate_cache
+                _invalidate_cache()
                 job.status = "done"
                 job.ts_done = datetime.now().timestamp()
                 await emit_job(job)
@@ -143,5 +148,5 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
                 clear_active_download(job.id)
                 CANCEL_EVENTS.pop(job.id, None)
 
-    asyncio.create_task(_run())
+    register_task(_run())
     return job.id

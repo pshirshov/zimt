@@ -28,7 +28,7 @@ from ..models.registry import MODELS
 from ..repl.commands import parse_commands
 from .jobs import run_job
 from .loader import ModelLoadError, load_model
-from .state import CANCEL_EVENTS, Job, STATE
+from .state import CANCEL_EVENTS, Job, STATE, register_task
 from .ws import emit_job, emit_log, emit_state
 
 
@@ -322,10 +322,13 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
             seed=seed,
             model=STATE.g.spec.name,
         )
-        g_snapshot = replace(STATE.g)
+        # dataclasses.replace is a shallow copy; lora_stack is a list, so
+        # without an explicit copy the snapshot would alias the live
+        # STATE.g.lora_stack and observe any post-enqueue /lora mutation.
+        g_snapshot = replace(STATE.g, lora_stack=list(STATE.g.lora_stack))
         STATE.jobs[job.id] = job
         CANCEL_EVENTS[job.id] = threading.Event()
         job_ids.append(job.id)
         await emit_job(job)
-        asyncio.create_task(run_job(job, prompt_text, seed, raw_flag, g_snapshot))
+        register_task(run_job(job, prompt_text, seed, raw_flag, g_snapshot))
     return {"job_ids": job_ids, "log": log}

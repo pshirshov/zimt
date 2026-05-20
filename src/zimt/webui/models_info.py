@@ -14,10 +14,26 @@ recompute on demand whenever the UI asks.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from ..models.loras import LORAS
 from ..models.registry import MODELS
+
+# Short TTL cache around scan_cache_dir(). A single /many 16 with a
+# 3-LoRA stack would otherwise stat()-walk every cached repo 48 times
+# for state that cannot change inside a single second. Invalidated
+# explicitly by callers (prefetch_model on successful download).
+_CACHE_TTL_S = 1.0
+_cache_value: dict[str, dict[str, Any]] | None = None
+_cache_ts: float = 0.0
+
+
+def _invalidate_cache() -> None:
+    """Drop the TTL cache; callers use this when a prefetch finishes."""
+    global _cache_value, _cache_ts
+    _cache_value = None
+    _cache_ts = 0.0
 
 
 def _scan_cache() -> dict[str, dict[str, Any]]:
@@ -27,14 +43,22 @@ def _scan_cache() -> dict[str, dict[str, Any]]:
     cache hasn't been initialised — both are non-fatal: the UI shows
     "not installed" for everything in that case.
     """
+    global _cache_value, _cache_ts
+    now = time.monotonic()
+    if _cache_value is not None and (now - _cache_ts) < _CACHE_TTL_S:
+        return _cache_value
     try:
         from huggingface_hub import scan_cache_dir
     except ImportError:
-        return {}
+        _cache_value = {}
+        _cache_ts = now
+        return _cache_value
     try:
         info = scan_cache_dir()
     except Exception:
-        return {}
+        _cache_value = {}
+        _cache_ts = now
+        return _cache_value
     out: dict[str, dict[str, Any]] = {}
     for repo in info.repos:
         if repo.repo_type != "model":
@@ -43,6 +67,8 @@ def _scan_cache() -> dict[str, dict[str, Any]]:
             "size_bytes": int(repo.size_on_disk),
             "last_modified": float(repo.last_modified),
         }
+    _cache_value = out
+    _cache_ts = now
     return out
 
 

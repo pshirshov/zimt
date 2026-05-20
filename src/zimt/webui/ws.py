@@ -8,6 +8,7 @@ pruning happens consistently. Higher-level helpers (:func:`emit_state`,
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict
 from typing import Any
 
@@ -17,7 +18,20 @@ from .state import Job, STATE
 
 
 async def broadcast(event: dict[str, Any]) -> None:
-    payload = json.dumps(event)
+    # Per-event isolation: a single non-JSON-serializable payload must
+    # not tear down the broadcast loop for every client. default=str is
+    # the last-resort coercion for stray Path / datetime / numpy values.
+    try:
+        payload = json.dumps(event, default=str)
+    except (TypeError, ValueError) as e:
+        # Guard the diagnostic itself: event repr() can also raise.
+        try:
+            evt_repr = repr(event)
+        except Exception:
+            evt_repr = "<unrepr-able>"
+        print(f"zimt: dropped non-serializable broadcast: {e!r} event={evt_repr}",
+              file=sys.stderr)
+        return
     dead: list[WebSocket] = []
     for ws in list(STATE.clients):
         try:
@@ -33,7 +47,15 @@ async def emit_state() -> None:
 
 
 async def emit_job(job: Job) -> None:
-    await broadcast({"type": "job", "job": asdict(job)})
+    if job.kind == "download":
+        # Read download_* fields under the same lock the tqdm worker
+        # holds when writing them — see downloads.ProgressTqdm._emit.
+        from .downloads import _active_lock
+        with _active_lock:
+            payload = asdict(job)
+    else:
+        payload = asdict(job)
+    await broadcast({"type": "job", "job": payload})
 
 
 async def emit_log(msg: str, level: str = "info") -> None:

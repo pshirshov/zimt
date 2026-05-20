@@ -32,7 +32,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`. One 
 Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 
 - [x] **PR-07** — Whole-codebase review inventory and defect triage.
-- [ ] **PR-08** — Backend concurrency and lifecycle follow-up fixes.
+- [x] **PR-08** — Backend concurrency and lifecycle follow-up fixes.
 - [ ] **PR-09** — Frontend state and API-contract follow-up fixes.
 - [ ] **PR-10** — Filesystem, configuration, and external-boundary follow-up fixes.
 - [ ] **PR-11** — Final adversarial review and release verification.
@@ -551,3 +551,66 @@ remains planned.
     raised as separate defects per the brief's "quality not
     coverage" framing. PR-08/PR-09 fix work should add regression
     tests for any defect whose fix lands.
+
+- **PR-08** (2026-05-20) — Backend concurrency and lifecycle fixes for
+  PR-07-D01, D03, D05, D07, D08, D09, D10, D11, D12, D13. Headline
+  changes: new `LOADING_LOCK = asyncio.Lock()` in `state.py` wraps the
+  loader's gate-then-set so two concurrent loads can't race through
+  the polling window (D03); `_BACKGROUND_TASKS: set[asyncio.Task]` +
+  `register_task(coro)` helper in `state.py` is now used at every
+  prior `asyncio.create_task` site except the heartbeat (which is
+  already bound to a local), eliminating the GC-of-pending-task class
+  (D05); `_graceful_shutdown` now drains `_PREFETCH_EXECUTOR` after
+  `EXECUTOR` (D07); `exec_api.api_exec`'s `replace(STATE.g)` now
+  passes `lora_stack=list(STATE.g.lora_stack)` so the job snapshot
+  doesn't alias the live stack (D08); `jobs.run_job`'s generic
+  exception path now writes `f"{type(e).__name__}: {e}"` rather than
+  `repr(e)`, matching the cleaner `UninstalledLoraError` rendering
+  (D09); `_active_lock`'s hold extends across the field writes in
+  `_emit` and across the `asdict(job)` snapshot in `ws.emit_job` for
+  download jobs, so the asyncio reader can't observe a torn
+  download_* tuple (D10); `ws.broadcast` wraps the `json.dumps` in
+  try/except with a `default=str` fallback and an inner guard against
+  pathological `__repr__`s, so a single bad event no longer takes the
+  broadcast loop down (D11); the `StateCase.setUp` cross-loop reset
+  now also targets `PIPE_LOCK` and `LOADING_LOCK` in addition to
+  `_PREFETCH_LOCK` (D12); `models_info` got a `_CACHE_TTL_S = 1.0`
+  TTL cache + `_invalidate_cache()` invalidated on prefetch success
+  AND on base-model load success, with two regression tests covering
+  TTL expiry and explicit invalidation (D13 + PR-08-D03 follow-up).
+  D01 (pre-existing `LoaderTests` mismatch) was closed by aligning
+  the assertion to expect `ModelLoadError`. Three follow-ups
+  surfaced by the adversarial review were closed in the same PR:
+  PR-08-D01 (the D03 regression test was structurally unable to
+  exercise the race), PR-08-D02 (`loader.load_model` still used
+  `repr(e)`, asymmetric with the D09 fix in `jobs.py`), and
+  PR-08-D03 (cache invalidation skipped the base-load path).
+  Verification:
+  - `.venv/bin/python -m unittest discover -s tests` → 46 tests, all
+    pass (was 35 pass + 1 fail). The previously-failing
+    `LoaderTests.test_failed_load_clears_stale_config_and_same_model_reloads`
+    now passes after the D01 fix. +11 net tests: 8 new in PR-08
+    proper, 3 new added by the PR-08 follow-ups (TTL-expiry test,
+    explicit-invalidate test, restructured concurrent-load test
+    replaces but doesn't add).
+  - `node --test tests/*.test.js` → 33/33 unchanged.
+  - `nix develop --command pyright src/zimt` → only the pre-existing
+    `downloads.py:246` tqdm monkey-patch finding (PR-10/D02).
+  Review:
+  - One adversarial review round flagged three follow-up gaps; all
+    closed in this PR. The reviewer's verdict was "ship with
+    caveats"; the caveats were addressed before commit.
+  Notes / constraints:
+  - The `_active_lock` extension over `asdict(job)` for download jobs
+    means a brief asyncio-side hold of a `threading.Lock`. Audit found
+    no nested-lock acquisition path that could deadlock — the executor
+    thread acquires `_active_lock` only inside `_emit`/`close`, the
+    asyncio thread only inside `emit_job`/`current_download`.
+  - The TTL cache for `_scan_cache` is intentionally short (1.0s).
+    Long-running test suites that need fresh scans should call
+    `_invalidate_cache()` between assertions; the new
+    `ModelsInfoCacheTests` document this pattern.
+  - `register_task` is intentionally not used for the per-WS
+    heartbeat task — that task is retained by its local `hb_task`
+    binding in the `ws_endpoint` coroutine, so a separate set entry
+    is redundant.

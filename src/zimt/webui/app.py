@@ -50,7 +50,7 @@ from .models_info import models_info
 from .outputs import list_outputs, read_png_meta, resolve_output, safe_name
 from .prefetch import PrefetchError, prefetch_model
 from .rpc import dispatch, method, rpc_error
-from .state import CANCEL_EVENTS, EXECUTOR, STATE
+from .state import CANCEL_EVENTS, EXECUTOR, STATE, register_task
 from .ws import broadcast, emit_job, emit_state
 
 app = FastAPI()
@@ -186,7 +186,7 @@ async def _on_startup() -> None:
             print(f"zimt: custom descriptor error: {err}")
     if report["bases"] or report["loras"]:
         print(f"zimt: loaded custom bases={report['bases']} loras={report['loras']}")
-    asyncio.create_task(_gpu_stats_loop())
+    register_task(_gpu_stats_loop())
 
 
 @app.on_event("shutdown")
@@ -205,6 +205,11 @@ async def _graceful_shutdown() -> None:
     for ev in list(CANCEL_EVENTS.values()):
         ev.set()
     EXECUTOR.shutdown(wait=True, cancel_futures=True)
+    # Drain the prefetch executor too; it runs HF snapshot_download on a
+    # separate single-worker pool, and without an explicit shutdown a
+    # SIGTERM during prefetch is left to systemd's KILL.
+    from .prefetch import _PREFETCH_EXECUTOR
+    _PREFETCH_EXECUTOR.shutdown(wait=True, cancel_futures=True)
     print("zimt: shutdown complete")
 
 
@@ -479,7 +484,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if not await _send({"type": "ping", "nonce": nonce,
                                     "ts": time.time() * 1000.0}):
                     return
-                asyncio.create_task(_watchdog(nonce))
+                register_task(_watchdog(nonce))
         except asyncio.CancelledError:
             pass
 
@@ -523,7 +528,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
             # Each request is dispatched as its own task so a slow
             # handler (e.g. ``exec`` that awaits a model download)
             # doesn't block other messages on this socket.
-            asyncio.create_task(dispatch(ws, raw))
+            register_task(dispatch(ws, raw))
     except WebSocketDisconnect:
         pass
     except Exception:

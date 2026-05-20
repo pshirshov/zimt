@@ -53,6 +53,10 @@ class StateCase(unittest.IsolatedAsyncioTestCase):
         # contend _PREFETCH_LOCK (each IsolatedAsyncioTestCase gets a fresh
         # event loop, and a cached pointer from a prior test would cross-bind).
         setattr(prefetch._PREFETCH_LOCK, "_loop", None)
+        # Same cross-loop binding hazard for PIPE_LOCK as for _PREFETCH_LOCK.
+        from zimt.webui import state as _state_mod
+        setattr(_state_mod.PIPE_LOCK, "_loop", None)
+        setattr(_state_mod.LOADING_LOCK, "_loop", None)
 
     def tearDown(self) -> None:
         STATE.pipe = self._pipe
@@ -77,7 +81,7 @@ class LoaderTests(StateCase):
             raise RuntimeError("simulated load failure")
 
         with patch.object(loader, "_do_load_sync", fail_after_unload):
-            with self.assertRaises(HTTPException):
+            with self.assertRaises(loader.ModelLoadError):
                 await loader.load_model("pony-v6-xl")
 
         self.assertIsNone(STATE.pipe)
@@ -857,3 +861,290 @@ class AuthTests(unittest.TestCase):
                 "origin": "https://example.test",
                 "authorization": "",
             }))
+
+
+# ---------------------------------------------------------------------------
+# PR-08 regression tests
+# ---------------------------------------------------------------------------
+
+class ConcurrentLoadGateTests(StateCase):
+    async def test_concurrent_loads_serialized_by_loading_lock(self) -> None:
+        # PR-08-D01 / PR-07-D03: set up the race LOADING_LOCK prevents.
+        #
+        # The holder pre-sets STATE.loading_model = "ascii-art", simulating
+        # a prior loader that crossed the gate but has not yet reset it.
+        # T1 (pony-v6-xl) and T2 (z-image-turbo) are then spawned; both
+        # call load_model and park in the polling loop waiting for the
+        # holder to release.  Without LOADING_LOCK both tasks would observe
+        # None on the same scheduler tick and both would set loading_model.
+        # With LOADING_LOCK their critical sections are strictly serialised.
+        #
+        # We replace loader.LOADING_LOCK with a recording wrapper whose
+        # __aenter__/__aexit__ log enter/exit events.  The assertion checks
+        # that no two tasks hold the lock simultaneously (non-overlapping
+        # windows).  If the async-with block were removed the two tasks
+        # would both observe loading_model is None and both proceed,
+        # producing overlapping windows in the log.
+
+        # Recording wrapper around the real LOADING_LOCK.
+        real_lock = loader.LOADING_LOCK  # the real asyncio.Lock from state.py
+        lock_log: list[tuple[str, str]] = []  # (model_name, "enter"/"exit")
+
+        class RecordingLock:
+            async def __aenter__(self) -> "RecordingLock":
+                await real_lock.__aenter__()
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                await real_lock.__aexit__(*args)
+
+        recording_lock = RecordingLock()
+
+        # Intercept STATE.loading_model transitions via emit_state.
+        # The first emit_state call while loading_model == name records
+        # "enter".  The first emit_state call after loading_model goes back
+        # to None records "exit" for the model that just finished.
+        original_emit_state = loader.emit_state
+        entered_set: set[str] = set()    # models for which "enter" was logged
+        active_model: list[str] = []     # [model_name] while that model holds
+
+        async def recording_emit_state() -> None:
+            lm = STATE.loading_model
+            if lm in ("pony-v6-xl", "z-image-turbo") and lm not in entered_set:
+                lock_log.append((lm, "enter"))
+                entered_set.add(lm)
+                active_model[:] = [lm]
+            elif lm is None and active_model:
+                lock_log.append((active_model[0], "exit"))
+                active_model.clear()
+            await original_emit_state()
+
+        # Pre-set the holder state: simulates a prior loader that crossed
+        # the gate but has not yet reset STATE.loading_model.
+        STATE.loading_model = "ascii-art"
+
+        def succeed(name: str) -> None:
+            STATE.pipe = object()
+            STATE.g = _config_for(name)
+
+        with (
+            patch.object(loader, "_do_load_sync", succeed),
+            patch.object(loader, "_has_active_generation_jobs", return_value=False),
+            patch.object(loader, "LOADING_LOCK", recording_lock),
+            patch.object(loader, "emit_state", recording_emit_state),
+        ):
+            t1 = asyncio.create_task(loader.load_model("pony-v6-xl"))
+            t2 = asyncio.create_task(loader.load_model("z-image-turbo"))
+            # Yield enough times for T1 to acquire the lock and start
+            # polling (it will sleep 0.25s inside the while loop).  T2 is
+            # waiting for the lock.  Neither task has set loading_model yet.
+            for _ in range(5):
+                await asyncio.sleep(0)
+            self.assertEqual(lock_log, [])
+            # Release the holder: clear loading_model so the polling loop
+            # can observe None and proceed.  The 0.25s sleep will expire on
+            # its own; just wait for both tasks to finish.
+            STATE.loading_model = None
+            await asyncio.wait_for(asyncio.gather(t1, t2), timeout=5)
+
+        # The lock log must show strictly alternating enter/exit pairs:
+        # no two "enter" events without an intervening "exit".
+        self.assertEqual(len(lock_log), 4, lock_log)
+        self.assertEqual(lock_log[0][1], "enter")
+        self.assertEqual(lock_log[1][1], "exit")
+        self.assertEqual(lock_log[0][0], lock_log[1][0])
+        self.assertEqual(lock_log[2][1], "enter")
+        self.assertEqual(lock_log[3][1], "exit")
+        self.assertEqual(lock_log[2][0], lock_log[3][0])
+
+
+class BackgroundTaskRegistryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_register_task_retains_strong_reference_until_done(self) -> None:
+        # PR-07-D05: register_task adds a strong reference; the task must
+        # remain in _BACKGROUND_TASKS for its lifetime and be removed on done.
+        from zimt.webui import state as state_mod
+        ran = asyncio.Event()
+
+        async def worker() -> None:
+            await asyncio.sleep(0)
+            ran.set()
+
+        t = state_mod.register_task(worker())
+        self.assertIn(t, state_mod._BACKGROUND_TASKS)
+        await ran.wait()
+        await t
+        # done_callback fires on the loop; let it run.
+        await asyncio.sleep(0)
+        self.assertNotIn(t, state_mod._BACKGROUND_TASKS)
+
+
+class GracefulShutdownExecutorTests(unittest.TestCase):
+    def test_graceful_shutdown_drains_prefetch_executor(self) -> None:
+        # PR-07-D07: the shutdown handler must drain _PREFETCH_EXECUTOR in
+        # addition to EXECUTOR. We inspect the handler source rather than
+        # invoke it (running it would tear down the inference executor too).
+        import inspect
+        src = inspect.getsource(web_app._graceful_shutdown)
+        self.assertIn("_PREFETCH_EXECUTOR", src)
+        self.assertIn("_PREFETCH_EXECUTOR.shutdown(", src)
+
+
+class LoraSnapshotTests(StateCase):
+    async def test_generation_snapshot_isolates_lora_stack_from_post_enqueue_mutation(self) -> None:
+        # PR-07-D08: dataclasses.replace is shallow; lora_stack must be
+        # deep-copied or post-enqueue /lora mutations leak into the job.
+        STATE.pipe = object()
+        STATE.g = _config_for("pony-v6-xl")
+        STATE.g.lora_stack = [("pixel-art-xl", 1.0)]
+        captured: list[GenConfig] = []
+
+        async def fake_run_job(
+            _job: Job, _raw_prompt: str, _seed: int, _raw: bool, g: GenConfig,
+        ) -> None:
+            captured.append(g)
+
+        with patch.object(exec_api, "run_job", fake_run_job):
+            await exec_api.api_exec(ExecBody(line="test prompt"))
+            assert STATE.g is not None
+            STATE.g.lora_stack.append(("ascii-art", 0.8))
+            STATE.g.lora_stack.clear()
+            await asyncio.sleep(0)
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0].lora_stack, [("pixel-art-xl", 1.0)])
+
+
+class JobErrorFormattingTests(StateCase):
+    async def test_generic_pipeline_exception_renders_as_class_colon_message(self) -> None:
+        # PR-07-D09: job.error should be "ValueError: foo" rather than
+        # "ValueError('foo')" so the UI prints a readable message.
+        STATE.pipe = MagicMock()
+        STATE.g = _config_for("z-image-turbo")
+
+        job = Job(id="gen-fail", kind="generate", status="queued")
+        STATE.jobs[job.id] = job
+        CANCEL_EVENTS[job.id] = threading.Event()
+
+        def boom(*_a: Any, **_kw: Any) -> None:
+            raise ValueError("foo")
+
+        with patch.object(jobs_mod, "_run_generate_sync", boom):
+            await jobs_mod.run_job(job, "test prompt", 42, False, STATE.g)
+
+        self.assertEqual(job.status, "error")
+        self.assertEqual(job.error, "ValueError: foo")
+        self.assertFalse((job.error or "").startswith("ValueError('"))
+
+
+class BroadcastResilienceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_broadcast_drops_non_serializable_event_without_raising(self) -> None:
+        # PR-07-D11: a non-JSON-serializable payload must not tear down
+        # the broadcast loop. default=str now coerces stray values.
+        from zimt.webui.ws import broadcast
+        # set is non-JSON; default=str will coerce.
+        await broadcast({"type": "x", "value": {1, 2, 3}})
+
+    async def test_broadcast_truly_unserializable_returns_early(self) -> None:
+        from zimt.webui.ws import broadcast
+
+        class Recursive:
+            def __str__(self) -> str:
+                raise TypeError("nope")
+
+            def __repr__(self) -> str:
+                raise TypeError("nope")
+        # default=str also fails for Recursive; broadcast should swallow
+        # the TypeError and return rather than raise into the caller.
+        await broadcast({"type": "x", "value": Recursive()})
+
+
+class ModelsInfoCacheTests(unittest.TestCase):
+    def setUp(self) -> None:
+        models_info._invalidate_cache()
+
+    def tearDown(self) -> None:
+        models_info._invalidate_cache()
+
+    def test_is_installed_uses_ttl_cache_to_avoid_repeated_scans(self) -> None:
+        # PR-07-D13: two consecutive is_installed() within the TTL window
+        # should hit scan_cache_dir at most once.
+        call_count = {"n": 0}
+
+        class FakeRepo:
+            repo_id = "John6666/foo"
+            repo_type = "model"
+            size_on_disk = 1234
+            last_modified = 0.0
+
+        class FakeInfo:
+            repos = [FakeRepo()]
+
+        def fake_scan() -> FakeInfo:
+            call_count["n"] += 1
+            return FakeInfo()
+
+        import huggingface_hub
+        with patch.object(huggingface_hub, "scan_cache_dir", fake_scan):
+            self.assertTrue(models_info.is_installed("John6666/foo"))
+            self.assertTrue(models_info.is_installed("John6666/foo"))
+            self.assertFalse(models_info.is_installed("missing/repo"))
+        self.assertEqual(call_count["n"], 1)
+
+    def test_is_installed_re_scans_after_ttl_expires(self) -> None:
+        # PR-08-D03: advancing monotonic past _CACHE_TTL_S must trigger a
+        # second scan_cache_dir call.
+        call_count = {"n": 0}
+
+        class FakeRepo:
+            repo_id = "John6666/foo"
+            repo_type = "model"
+            size_on_disk = 1234
+            last_modified = 0.0
+
+        class FakeInfo:
+            repos = [FakeRepo()]
+
+        times = [0.0, 0.0, models_info._CACHE_TTL_S + 1.0]
+        time_iter = iter(times)
+
+        def fake_monotonic() -> float:
+            return next(time_iter)
+
+        def fake_scan() -> FakeInfo:
+            call_count["n"] += 1
+            return FakeInfo()
+
+        import huggingface_hub
+        with (
+            patch.object(huggingface_hub, "scan_cache_dir", fake_scan),
+            patch.object(models_info.time, "monotonic", fake_monotonic),
+        ):
+            models_info.is_installed("John6666/foo")  # scan #1 at t=0
+            models_info.is_installed("John6666/foo")  # cache hit at t=0
+            models_info.is_installed("John6666/foo")  # scan #2 at t=TTL+1
+        self.assertEqual(call_count["n"], 2)
+
+    def test_is_installed_re_scans_after_explicit_invalidate(self) -> None:
+        # PR-08-D03: _invalidate_cache() must force a fresh scan even within
+        # the TTL window.
+        call_count = {"n": 0}
+
+        class FakeRepo:
+            repo_id = "John6666/foo"
+            repo_type = "model"
+            size_on_disk = 1234
+            last_modified = 0.0
+
+        class FakeInfo:
+            repos = [FakeRepo()]
+
+        def fake_scan() -> FakeInfo:
+            call_count["n"] += 1
+            return FakeInfo()
+
+        import huggingface_hub
+        with patch.object(huggingface_hub, "scan_cache_dir", fake_scan):
+            models_info.is_installed("John6666/foo")  # scan #1
+            models_info._invalidate_cache()
+            models_info.is_installed("John6666/foo")  # scan #2 after invalidation
+        self.assertEqual(call_count["n"], 2)

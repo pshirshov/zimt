@@ -21,7 +21,8 @@ from ..models.registry import MODELS
 from .downloads import (
     DownloadCanceled, clear_active_download, download_context, set_active_download,
 )
-from .state import CANCEL_EVENTS, EXECUTOR, Job, PIPE_LOCK, STATE
+from .models_info import _invalidate_cache as _invalidate_models_cache
+from .state import CANCEL_EVENTS, EXECUTOR, Job, LOADING_LOCK, PIPE_LOCK, STATE
 from .ws import broadcast, emit_job, emit_log, emit_state
 
 
@@ -66,22 +67,26 @@ async def load_model(name: str) -> None:
         await emit_log(f"{name} is already loaded")
         return
 
-    while STATE.loading_model is not None:
-        await asyncio.sleep(0.25)
-
-    # Create a download Job for the UI queue. It tracks bytes via the
-    # tqdm bridge installed at startup. We mark it ``running`` because
-    # the load starts immediately — there's no queued state for loads.
-    job = Job(
-        id=uuid.uuid4().hex,
-        kind="download",
-        target_kind="base",
-        status="running",
-        model=name,
-    )
-    STATE.jobs[job.id] = job
-    CANCEL_EVENTS[job.id] = threading.Event()
-    STATE.loading_model = name
+    # Atomic check-and-set of STATE.loading_model. Without LOADING_LOCK,
+    # two concurrent load_model() coroutines could both observe
+    # loading_model is None across the await asyncio.sleep boundary and
+    # both create download jobs / set STATE.loading_model.
+    async with LOADING_LOCK:
+        while STATE.loading_model is not None:
+            await asyncio.sleep(0.25)
+        # Create a download Job for the UI queue. It tracks bytes via the
+        # tqdm bridge installed at startup. We mark it ``running`` because
+        # the load starts immediately — there's no queued state for loads.
+        job = Job(
+            id=uuid.uuid4().hex,
+            kind="download",
+            target_kind="base",
+            status="running",
+            model=name,
+        )
+        STATE.jobs[job.id] = job
+        CANCEL_EVENTS[job.id] = threading.Event()
+        STATE.loading_model = name
     await emit_job(job)
     await emit_state()
     try:
@@ -134,12 +139,13 @@ async def load_model(name: str) -> None:
                 STATE.pipe = None
                 STATE.g = None
                 job.status = "error"
-                job.error = repr(e)
+                job.error = f"{type(e).__name__}: {e}"
                 job.ts_done = datetime.now().timestamp()
                 await emit_job(job)
-                await broadcast({"type": "model_error", "error": repr(e)})
+                await broadcast({"type": "model_error", "error": f"{type(e).__name__}: {e}"})
                 await emit_state()
-                raise ModelLoadError(repr(e)) from e
+                raise ModelLoadError(f"{type(e).__name__}: {e}") from e
+        _invalidate_models_cache()
         job.status = "done"
         job.ts_done = datetime.now().timestamp()
         await emit_job(job)

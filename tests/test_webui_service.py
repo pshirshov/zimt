@@ -7,14 +7,17 @@ import os
 import threading
 import unittest
 from dataclasses import asdict
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
 import zimt.webui.app as web_app
-from zimt.generate import GenConfig
+import zimt.webui.models_info as models_info
+from zimt import generate as generate_mod
+from zimt.generate import GenConfig, UninstalledLoraError, _apply_lora_stack
+from zimt.lora_cmd import apply_lora_args
 from zimt.models.registry import MODELS
-from zimt.webui import downloads, exec_api, loader, prefetch
+from zimt.webui import downloads, exec_api, jobs as jobs_mod, loader, prefetch
 from zimt.webui.exec_api import ExecBody
 from zimt.webui.state import CANCEL_EVENTS, Job, STATE
 
@@ -552,6 +555,67 @@ class ProgressUnitTests(StateCase):
                 self.assertEqual(STATE.jobs[job.id].download_files_done, 0)
         finally:
             downloads.clear_active_download(job.id)
+
+
+class UninstalledLoraGuardTests(StateCase):
+    def _sdxl_config(self) -> GenConfig:
+        return _config_for("pony-v6-xl")
+
+    def test_generation_with_uninstalled_lora_raises_before_load_lora_weights(self) -> None:
+        pipe = MagicMock()
+        pipe._zimt_loras_loaded = set()
+        g = self._sdxl_config()
+        g.lora_stack = [("pixel-art-xl", 0.8)]
+        with patch.object(models_info, "is_installed", return_value=False):
+            with self.assertRaises(UninstalledLoraError) as cm:
+                _apply_lora_stack(pipe, g)
+        self.assertIn("pixel-art-xl", cm.exception.names)
+        pipe.load_lora_weights.assert_not_called()
+        pipe.set_adapters.assert_not_called()
+
+    def test_generation_with_installed_lora_proceeds_to_load_lora_weights(self) -> None:
+        pipe = MagicMock()
+        pipe._zimt_loras_loaded = set()
+        g = self._sdxl_config()
+        g.lora_stack = [("pixel-art-xl", 0.8)]
+        with patch.object(models_info, "is_installed", return_value=True):
+            _apply_lora_stack(pipe, g)
+        pipe.load_lora_weights.assert_called_once()
+        pipe.set_adapters.assert_called_once()
+
+    def test_lora_cmd_add_rejects_uninstalled_lora_and_does_not_append_to_stack(self) -> None:
+        base = MODELS["pony-v6-xl"]
+        stack: list[tuple[str, float]] = []
+        with patch.object(models_info, "is_installed", return_value=False):
+            log = apply_lora_args(stack, ["pixel-art-xl"], base)
+        self.assertEqual(stack, [])
+        self.assertTrue(any("not installed" in line for line in log),
+                        f"expected 'not installed' message in log, got {log!r}")
+
+    async def test_run_job_reports_uninstalled_lora_error_with_clean_message(self) -> None:
+        STATE.pipe = MagicMock()
+        STATE.pipe._zimt_loras_loaded = set()
+        STATE.g = self._sdxl_config()
+        STATE.g.lora_stack = [("pixel-art-xl", 0.8)]
+        # Short-circuit _ensure_sampler (would otherwise touch scheduler.config).
+        STATE.pipe._zimt_sampler = STATE.g.spec.default_sampler
+
+        job = Job(id="gen-uninstalled", kind="generate", status="queued")
+        STATE.jobs[job.id] = job
+        CANCEL_EVENTS[job.id] = threading.Event()
+
+        with patch.object(models_info, "is_installed", return_value=False):
+            await jobs_mod.run_job(job, "test prompt", 42, False, STATE.g)
+
+        self.assertEqual(job.status, "error")
+        self.assertIsNotNone(job.error)
+        expected = str(UninstalledLoraError(["pixel-art-xl"]))
+        self.assertEqual(job.error, expected)
+        # Must be the plain message, not the repr-formatted one.
+        self.assertFalse(job.error.startswith("UninstalledLoraError("),
+                         f"error should be str(e), not repr(e): {job.error!r}")
+        STATE.pipe.load_lora_weights.assert_not_called()
+        STATE.pipe.assert_not_called()  # the pipeline itself was never invoked
 
 
 class RegistryTests(unittest.TestCase):

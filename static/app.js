@@ -1168,6 +1168,24 @@ function renderBases() {
   }
 }
 
+function _loraAddBtnState({ compatible, loaded, dlJob, isActive, installed, compat, baseTags }) {
+  // Active stack entries are always removable, regardless of install state —
+  // the user must be able to clear the stack even if a LoRA gets uninstalled.
+  const text = isActive ? "remove" : "add";
+  const disabled = !compatible || !loaded || !!dlJob || (!isActive && !installed);
+  let title;
+  if (!compatible) {
+    title = `incompatible: lora needs ${compat.join("/") || "?"}; base is ${baseTags.join("/") || "—"}`;
+  } else if (!installed && !isActive) {
+    title = "not installed — use the download button below first";
+  } else if (isActive) {
+    title = "remove from active LoRA stack";
+  } else {
+    title = "add to active LoRA stack";
+  }
+  return { text, disabled, title };
+}
+
 function renderLoras() {
   const root = $("loras-list");
   root.innerHTML = "";
@@ -1216,11 +1234,14 @@ function renderLoras() {
 
     const addBtn = document.createElement("button");
     addBtn.className = "section-btn";
-    addBtn.textContent = isActive ? "remove" : "add";
-    addBtn.title = compatible
-      ? (isActive ? "remove from active LoRA stack" : "add to active LoRA stack")
-      : `incompatible: lora needs ${compat.join("/") || "?"}; base is ${[...baseTags].join("/") || "—"}`;
-    addBtn.disabled = !compatible || !state?.loaded || !!dlJob;
+    const btnState = _loraAddBtnState({
+      compatible, loaded: !!state?.loaded, dlJob,
+      isActive, installed: !!m.installed,
+      compat, baseTags: [...baseTags],
+    });
+    addBtn.textContent = btnState.text;
+    addBtn.title = btnState.title;
+    addBtn.disabled = btnState.disabled;
     addBtn.onclick = async () => {
       addBtn.disabled = true;
       const arg = isActive ? `-${m.name}` : m.name;

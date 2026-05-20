@@ -31,6 +31,19 @@ class CancelledByUser(Exception):
     """Raised inside a pipeline callback to abort an in-flight generation."""
 
 
+class UninstalledLoraError(Exception):
+    """Raised when generation requests a LoRA whose HF repo is not in the
+    local cache. Fail-fast — we refuse to initiate an untracked download.
+    Resolution: install the LoRA via the Models tab first."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__(
+            f"LoRA(s) not installed: {', '.join(names)}. "
+            f"Install via the Models tab before generating."
+        )
+        self.names = names
+
+
 @dataclass
 class GenConfig:
     """Mutable per-session generation knobs scoped to one loaded model.
@@ -111,6 +124,19 @@ def _apply_lora_stack(pipe: Any, g: GenConfig) -> None:
         # ZImagePipeline doesn't currently expose set_adapters; silently
         # ignore the stack rather than erroring on every generate.
         return
+    if g.lora_stack:
+        from .webui.models_info import is_installed
+        missing: list[str] = []
+        for name, _w in g.lora_stack:
+            spec = LORAS.get(name)
+            if spec is None:
+                # Unknown names fall through to the existing ValueError
+                # in the load loop below — that's a separate concern.
+                continue
+            if spec.repo_id and not is_installed(spec.repo_id):
+                missing.append(name)
+        if missing:
+            raise UninstalledLoraError(missing)
     loaded: set[str] = getattr(pipe, "_zimt_loras_loaded", set())
     for name, _weight in g.lora_stack:
         if name in loaded:

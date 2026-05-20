@@ -21,7 +21,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`. One 
 - [x] **PR-02** — Make download progress ownership job-scoped.
 - [x] **PR-03** — Add cancellation semantics for download jobs.
 - [x] **PR-04** — Normalize Hugging Face progress units.
-- [ ] **PR-05** — Prevent untracked LoRA downloads during generation.
+- [x] **PR-05** — Prevent untracked LoRA downloads during generation.
 - [ ] **PR-06** — Consolidate model-tab download state transitions.
 
 ---
@@ -44,7 +44,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 - [x] Download progress ownership invariant — at most one HF download owns the progress slot at a time, acquired by job id via `set_active_download` and released by the same id via `clear_active_download`. Per-bar identity is propagated to executor workers via a `contextvars.ContextVar` (`download_context(job_id)`); callers MUST use `ctx = contextvars.copy_context()` and dispatch via `loop.run_in_executor(executor, lambda: ctx.run(func, *args))` — `run_in_executor` does NOT propagate contextvars on its own (CPython 3.13). tqdm bars constructed in the worker capture the owner id and silently drop events when it does not match the slot. Loser callers receive a passive busy state via `emit_log`; a row-level "busy" indicator is deferred to PR-06. Lands in PR-02 (D10 fix landed in PR-03 to satisfy the production assumption).
 - [x] Download cancellation invariant — each download job (`load_model` and `prefetch_model`) registers a `threading.Event` in `CANCEL_EVENTS` at Job creation and pops it on exit. Cancellation observed at controlled boundaries: loader's pre-load polling loop, prefetch's post-`_PREFETCH_LOCK` checkpoint, and `ProgressTqdm.__init__` / `update` (raises `DownloadCanceled` which is caught in both callers and ends the job with status `canceled`). `jobs_cancel_all` RPC covers both `generate` and `download` kinds. The UI renders a cancel button on queued and running download rows. Lands in PR-03.
 - [x] Progress unit invariant — every progress event carries an explicit unit category (`"bytes"` | `"files"` | `"items"` | `""`) on `Job.download_unit`. Classification: HF's byte aggregate bar (`unit='B'`) is `"bytes"`; HF's outer file-count bar (`unit='it'` default, identified by `desc` regex `^(?:\[dry-run\]\s*)?Fetching\b`) is `"files"`; any other tqdm event is `"items"`. The UI never claims byte semantics without `unit=='B'` evidence. `download_files_done` is driven exclusively by the file-count bar's current `n` (overwrite in `_emit`, never mutated by `close()`); without a file-count bar it stays 0. Lands in PR-04.
-- [ ] LoRA dependency invariant — decide and encode in PR-05: generation must not initiate implicit Hugging Face downloads.
+- [x] LoRA dependency invariant — generation must not initiate implicit HF downloads. `is_installed(repo_id)` in `webui.models_info` is the single oracle for cache status; it scans `huggingface_hub.scan_cache_dir()` on each call and returns False on any error (safer default). `generate._apply_lora_stack` raises `UninstalledLoraError(missing)` before any `pipe.load_lora_weights(...)` call when any LoRA in the stack has an uninstalled repo. `lora_cmd.apply_lora_args` rejects uninstalled LoRAs at add time. `webui.jobs.run_job` catches `UninstalledLoraError` separately and reports a clean `str(e)`. Frontend disables the LoRA "add" button when `!installed` (active stack entries remain removable). Lands in PR-05.
 
 ---
 
@@ -285,3 +285,68 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
     coherent state model for this; PR-04 leaves it as-is per scope.
   - Pre-existing `LoaderTests` failure (HTTPException vs ModelLoadError)
     remains unchanged; not in PR-04's scope.
+
+- **PR-05** (2026-05-20) — Generation can no longer initiate an
+  untracked HF download. The defect was that `generate._apply_lora_stack`
+  called `pipe.load_lora_weights(spec.repo_id, ...)` for any LoRA in
+  `g.lora_stack`; if the repo wasn't in the local HF cache, diffusers
+  would silently spawn a network download outside the project's queue,
+  with no progress, no cancel, and no Job entry. PR-05 adds three
+  layers of guard: (1) `webui.models_info.is_installed(repo_id)` —
+  authoritative cache-status oracle backed by `huggingface_hub.scan_cache_dir`
+  (returns False on any error, fail-safe); (2) `_apply_lora_stack`
+  raises a new `UninstalledLoraError` listing every missing LoRA name
+  *before* the existing load loop runs; (3) `lora_cmd.apply_lora_args`
+  rejects uninstalled LoRAs at add time with a "not installed locally"
+  log line, so they never enter the stack in the first place. The
+  webui `jobs.run_job` adds a dedicated `except UninstalledLoraError`
+  branch before the generic catch so `job.error` reads as
+  `str(e)` ("LoRA(s) not installed: …. Install via the Models tab…")
+  rather than `repr(e)`. The frontend disables the LoRA "add" button
+  when the LoRA is uninstalled (active stack entries remain removable
+  to avoid stranding the user) via a new `_loraAddBtnState` helper.
+  Reproduction before fix:
+  - `UninstalledLoraGuardTests` failing first against the unmodified
+    `_apply_lora_stack`: with `is_installed` patched to False and a
+    LoRA in the stack, `pipe.load_lora_weights` was called (no
+    exception). Demonstrates the untracked-download surface.
+  Verification:
+  - `LD_LIBRARY_PATH=...HF_XET_HIGH_PERFORMANCE=1 .venv/bin/python -m unittest tests.test_webui_service.UninstalledLoraGuardTests`
+    → pass, 4 tests including the run_job end-to-end which asserts
+    both `pipe.load_lora_weights.assert_not_called()` and the bare
+    `STATE.pipe.assert_not_called()` (no pipeline invocation).
+  - `.venv/bin/python -m unittest discover -s tests` → 30 tests, 29 pass,
+    1 pre-existing failure unchanged (`LoaderTests.test_failed_load_...`).
+  - `node --test tests/*.test.js` → 20/20 pass (4 new
+    `_loraAddBtnState` tests covering installed, uninstalled,
+    active-uninstalled, and incompatible cases).
+  - `nix develop --command pyright src/zimt` → only the pre-existing
+    tqdm monkey-patch finding remains; no new findings.
+  Review:
+  - One round of adversarial review on the implementation. Two
+    coverage gaps flagged (PR-05-D01: incompatible-LoRA frontend test
+    missing; PR-05-D02: run_job test lacked the plan-required network
+    sentinel). Both closed in a single follow-up; no source code
+    changes, only test additions.
+  Notes / constraints:
+  - `lora_cmd.py` must lazy-import `is_installed` from
+    `webui.models_info` because `webui.exec_api` top-imports
+    `lora_cmd` (a top-level reverse import would create a cycle).
+    Same lazy-import pattern in `generate._apply_lora_stack`.
+  - `_apply_lora_stack`'s `family != "sdxl"` early return continues
+    to skip the install check — by inspection no non-SDXL family
+    triggers `load_lora_weights` today, so non-SDXL is structurally
+    safe. If a future model family begins calling `load_lora_weights`
+    the guard must move above the family check.
+  - `is_installed` calls `_scan_cache()` per invocation. Cost is the
+    same "few ms per repo" that PR-01's notes already document. No
+    in-process caching was added because cache state can change
+    between calls (a parallel prefetch can install a LoRA mid-session),
+    and a stale cache would re-introduce the untracked-download path
+    we just closed.
+  - The user-visible error message format (`"LoRA(s) not installed:
+    {names}. Install via the Models tab before generating."`) is
+    deterministic; the existing `run_job` test asserts the exact
+    string. If the wording changes, update the test.
+  - Pre-existing `LoaderTests` failure (HTTPException vs
+    ModelLoadError) remains unchanged; not in PR-05's scope.

@@ -15,7 +15,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from ..generate import CancelledByUser, generate
+from ..generate import CancelledByUser, UninstalledLoraError, generate
 from ..generate import GenConfig
 from ..paths import OUT_DIR
 from .outputs import read_png_meta
@@ -86,6 +86,13 @@ async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool,
         except CancelledByUser:
             job.status = "canceled"
             job.error = "canceled during generation"
+            job.ts_done = datetime.now().timestamp()
+            CANCEL_EVENTS.pop(job.id, None)
+            await emit_job(job)
+            return
+        except UninstalledLoraError as e:
+            job.status = "error"
+            job.error = str(e)
             job.ts_done = datetime.now().timestamp()
             CANCEL_EVENTS.pop(job.id, None)
             await emit_job(job)

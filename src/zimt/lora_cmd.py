@@ -76,6 +76,14 @@ def apply_lora_args(
                 f"compatible with base {base.name} (tags={base.compatibility_tags})"
             )
             continue
+        if spec.repo_id:
+            from .webui.models_info import is_installed
+            if not is_installed(spec.repo_id):
+                log.append(
+                    f"lora: {name!r} is not installed locally; "
+                    f"install it via the Models tab before adding"
+                )
+                continue
         weight = _parse_weight(wstr) if sep else spec.default_weight
         for i, (n, _w) in enumerate(stack):
             if n == name:

@@ -46,6 +46,19 @@ def _scan_cache() -> dict[str, dict[str, Any]]:
     return out
 
 
+def is_installed(repo_id: str) -> bool:
+    """True if *repo_id* is present in the local HF cache.
+
+    Single source of truth; callers must not re-implement cache scanning.
+    Returns False when ``huggingface_hub`` is missing or the cache cannot
+    be scanned — the safer default so generation fails fast rather than
+    trusting an empty cache.
+    """
+    if not repo_id:
+        return False
+    return repo_id in _scan_cache()
+
+
 def _entry_for(name: str, repo_id: str, cache: dict[str, dict[str, Any]],
                **extra: Any) -> dict[str, Any]:
     cached = cache.get(repo_id) if repo_id else None

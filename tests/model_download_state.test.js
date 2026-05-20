@@ -290,3 +290,53 @@ test("download counter without unit but with counters returns plain numbers, NOT
   });
   assert.equal(out, "5 / 10");
 });
+
+test("lora add button disabled when not installed", () => {
+  const app = loadApp();
+  const r = app._loraAddBtnState({
+    compatible: true, loaded: true, dlJob: null,
+    isActive: false, installed: false,
+    compat: ["sdxl"], baseTags: ["sdxl"],
+  });
+  assert.equal(r.text, "add");
+  assert.equal(r.disabled, true);
+  assert.ok(r.title.includes("not installed"),
+            `expected title to mention 'not installed', got: ${r.title}`);
+});
+
+test("lora add button enabled when installed", () => {
+  const app = loadApp();
+  const r = app._loraAddBtnState({
+    compatible: true, loaded: true, dlJob: null,
+    isActive: false, installed: true,
+    compat: ["sdxl"], baseTags: ["sdxl"],
+  });
+  assert.equal(r.text, "add");
+  assert.equal(r.disabled, false);
+});
+
+test("lora active stack can be removed even if not installed", () => {
+  const app = loadApp();
+  const r = app._loraAddBtnState({
+    compatible: true, loaded: true, dlJob: null,
+    isActive: true, installed: false,
+    compat: ["sdxl"], baseTags: ["sdxl"],
+  });
+  assert.equal(r.text, "remove");
+  assert.equal(r.disabled, false);
+});
+
+test("_loraAddBtnState renders incompatible title and disabled when compatible=false", () => {
+  const app = loadApp();
+  const out = app._loraAddBtnState({
+    compatible: false,
+    loaded: true,
+    dlJob: null,
+    isActive: false,
+    installed: true,
+    compat: ["sdxl"],
+    baseTags: ["zimage"],
+  });
+  assert.equal(out.disabled, true);
+  assert.match(out.title, /^incompatible:/);
+});

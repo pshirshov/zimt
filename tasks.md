@@ -33,7 +33,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 
 - [x] **PR-07** — Whole-codebase review inventory and defect triage.
 - [x] **PR-08** — Backend concurrency and lifecycle follow-up fixes.
-- [ ] **PR-09** — Frontend state and API-contract follow-up fixes.
+- [x] **PR-09** — Frontend state and API-contract follow-up fixes.
 - [ ] **PR-10** — Filesystem, configuration, and external-boundary follow-up fixes.
 - [ ] **PR-11** — Final adversarial review and release verification.
 
@@ -614,3 +614,48 @@ remains planned.
     heartbeat task — that task is retained by its local `hb_task`
     binding in the `ws_endpoint` coroutine, so a separate set entry
     is redundant.
+
+- **PR-09** (2026-05-20) — Frontend state and API-contract fixes for
+  PR-07-D15, D16, D17, D18. Headline changes: the queue's
+  `MAX_QUEUE_SHOWN` LRU eviction in `static/app.js` now scans for the
+  oldest completed (`done`/`error`/`canceled`) entry and falls back to
+  oldest-active only when no completed entry exists, with a
+  `console.warn` documenting the degradation (D15). `_modelDlBtnState`
+  surfaces the unit alongside the percentage (`"downloading N% bytes"`
+  / `"downloading N% files"` / `"downloading N%"` when no unit), so
+  the model-tab button no longer flickers between byte-percent and
+  file-percent during a snapshot — note that the underlying
+  single-`download_n/total` Job-model issue is unchanged (PR-04 carry-
+  over); the mitigation lives in the helper (D16). The download
+  button's `onclick` now forces a `renderBases()` / `renderLoras()`
+  re-render after the await (and restores `dlBtn.textContent` from
+  the closure-captured `dlState.text` on the catch branch), so the
+  optimistic `"starting…"` is cleared even when the request collapses
+  into an existing job via PR-06 idempotency (D17). `buildRestorePromptLine`
+  emits one `/lora` command per LoRA in the active stack rather than a
+  single `/lora foo:0.7,bar:0.3` token that the arity-1 parser would
+  truncate (D18). New `tests/frontend_state.test.js` houses 8 tests
+  covering each defect's contract.
+  Verification:
+  - `node --test tests/*.test.js` → 41/41 pass (was 33; +8 new).
+  - `.venv/bin/python -m unittest discover -s tests` → 46/46 unchanged.
+  - `nix develop --command pyright src/zimt` → only the pre-existing
+    `downloads.py:246` finding (PR-10/D02).
+  Review:
+  - One adversarial review round. Verdict: clean accept. Five nits
+    considered and discarded (no Python round-trip for D18; D17
+    `notEqual` assertion is lenient; D16 button format diverges
+    from queue-row format intentionally; `console.warn` noise in D15
+    fallback; pyright finding pre-existing).
+  Notes / constraints:
+  - D16's fix mitigates the user-visible flicker but does not refactor
+    the `Job.download_n / download_total / download_unit` triple into
+    per-unit slots — that's the deferred PR-04 follow-up. The button
+    text and the queue-row text are unit-consistent at the same
+    instant; the helper's percentage is computed from the same
+    `n/total` regardless of which bar is currently firing.
+  - D18's emitted format relies on `repl.commands.parse_commands`'s
+    arity-1 contract for `/lora`. If that contract changes, the
+    restore-prompt format must be revisited.
+  - Pre-existing pyright `downloads.py:246` finding remains for
+    PR-10/D02.

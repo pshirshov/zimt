@@ -217,10 +217,22 @@ function onModelError(err) {
 
 function onJob(j) {
   jobs.set(j.id, j);
-  // bound size
+  // bound size — evict the oldest completed entry first to avoid displacing
+  // a still-running long-lived job (PR-07-D15).
   if (jobs.size > MAX_QUEUE_SHOWN) {
-    const oldest = jobs.keys().next().value;
-    jobs.delete(oldest);
+    let toEvict = null;
+    for (const [id, job] of jobs) {
+      if (job.status === "done" || job.status === "error" || job.status === "canceled") {
+        toEvict = id;
+        break;
+      }
+    }
+    if (toEvict == null) {
+      // All entries are active; fall back to oldest insertion (last resort).
+      toEvict = jobs.keys().next().value;
+      console.warn("onJob: all queue entries are active — evicting oldest (queue > MAX_QUEUE_SHOWN)");
+    }
+    jobs.delete(toEvict);
   }
   renderQueue();
   // Mirror download-job progress into the models tab if it's visible.
@@ -1106,9 +1118,14 @@ function _addCommonMeta(li, m, kind, downloadingByName, opts = {}) {
     try {
       await wsRequest("model_download", { name: m.name, kind });
       appendLog(`download started: ${m.name}`);
+      // Force a re-render so the button reverts from the optimistic "starting…"
+      // text on the idempotent-collapse path (no fresh job event will arrive
+      // for a pre-existing running job) — PR-07-D17.
+      if (kind === "base") renderBases(); else renderLoras();
     } catch (e) {
       appendLog(`download: ${e.message}`, "error");
       dlBtn.disabled = false;
+      dlBtn.textContent = dlState.text;
     }
   };
   actions.appendChild(dlBtn);
@@ -1164,8 +1181,21 @@ function _modelDlBtnState({ dlJob, installed }) {
   if (dlJob) {
     const pct = dlJob.download_total > 0
       ? Math.round(100 * dlJob.download_n / dlJob.download_total) : null;
+    // Include a unit suffix when the unit is known so the user can tell
+    // which scale the percentage refers to (PR-07-D16: byte-% vs file-%).
+    const unit = dlJob.download_unit || "";
+    let text;
+    if (pct == null) {
+      text = "downloading…";
+    } else if (unit === "bytes") {
+      text = `downloading ${pct}% bytes`;
+    } else if (unit === "files") {
+      text = `downloading ${pct}% files`;
+    } else {
+      text = `downloading ${pct}%`;
+    }
     return {
-      text: pct == null ? "downloading…" : `downloading ${pct}%`,
+      text,
       disabled: true,
       title: "download in progress",
     };

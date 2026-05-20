@@ -348,7 +348,7 @@ This calls `_scan_cache` once per `_apply_lora_stack` invocation rather than onc
 **Suggested fix:** `src/zimt/generate.py:123-126` — either (a) raise an explicit error like `raise ValueError(f"LoRA stacking is not supported for family={g.spec.family}; remove with /lora -")` so the user is forced to clear the stack, or (b) emit a one-time-per-config warning via the existing `print` channel ("note: family=zimage ignores LoRA stack") and clear `g.lora_stack` in place so the metadata doesn't lie. Option (a) is the fail-fast path consistent with the project's style; option (b) is the graceful-degradation path. Either way, the silent skip must end. Also update `lora_cmd.apply_lora_args` to reject Z-Image LoRAs against a non-SDXL base (or vice versa) at add time rather than letting the spec-compatibility check be the only gate.
 
 ## [PR-07-D15] MAX_QUEUE_SHOWN evicts the oldest entry which may be the running long-lived job rather than a completed one
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `static/app.js:11-12` (`let jobs = new Map(); ... const MAX_QUEUE_SHOWN = 30;`), `static/app.js:218-230` (`onJob`).
 **Description:** `onJob` updates the `jobs` Map by id; when `jobs.size > 30`, it deletes `jobs.keys().next().value` — the **insertion-order oldest** entry. If the user has been running the session a while and the oldest entry happens to be the still-running download (e.g., a multi-gigabyte base model still pulling), that entry is evicted from the UI even though the job is alive. The user sees the download disappear from the queue, has no way to cancel it, and only the log line "downloading X" persists. The backend `STATE.jobs` still has it. The eviction policy should be FIFO-among-completed, not strict-FIFO.
@@ -372,7 +372,7 @@ if (jobs.size > MAX_QUEUE_SHOWN) {
 Frontend test: enqueue 31 download jobs with the first 5 in status `running` and the rest `done`; assert the running ones are all still present after the cap is hit.
 
 ## [PR-07-D16] _modelDlBtnState computes pct from download_n/total regardless of download_unit, so the model-tab button text flickers between file-percent and byte-percent during a snapshot
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `static/app.js:1163-1185` (`_modelDlBtnState`).
 **Description:** The PR-04 unit-aware formatting was applied to `fmtDownloadCounter` (which renders the queue row's counter text) but **not** to `_modelDlBtnState` (which renders the model-tab download button). The button text computation at L1164-1167 is `pct = dlJob.download_total > 0 ? Math.round(100 * dlJob.download_n / dlJob.download_total) : null`. During a real `snapshot_download`, the file-count bar fires `n=3 total=7 unit="files"` → button reads "downloading 43%", then the byte bar fires `n=1024 total=100000000 unit="bytes"` → button reads "downloading 0%", then the file-count fires again with `n=4 total=7` → "downloading 57%", etc. The percentage oscillates between two incomparable scales. The task notes for PR-04 explicitly document this as a deferred follow-up that requires "a Job model refactor (new field for `progress_owner: bool`, splitting `download_n/total` into per-unit slots)". PR-07-D16 reflags it at the button-state site so it isn't lost.
@@ -380,7 +380,7 @@ Frontend test: enqueue 31 download jobs with the first 5 in status `running` and
 **Suggested fix:** add `download_n_bytes`, `download_total_bytes`, `download_n_files`, `download_total_files` separate slots to `Job`; update `_emit` to write only the slot matching the bar's unit. The button reads `download_n_files / download_total_files` when unit=="files" was last seen and bytes otherwise. Until that refactor lands, mitigate in `_modelDlBtnState` by suppressing the percentage when `dlJob.download_unit === "items"` or `""`, and adding a unit suffix when known: `text: "downloading " + (unit === "bytes" ? pct + "% bytes" : pct + "% files")`.
 
 ## [PR-07-D17] dlBtn.onclick sets textContent to "starting…" but doesn't restore it on the idempotent-collapse path
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `static/app.js:1104-1113` (`dlBtn.onclick`).
 **Description:** Click handler sets `dlBtn.disabled = true; dlBtn.textContent = "starting…";` then awaits `wsRequest("model_download", { name, kind })`. If the backend collapses to an existing job (PR-06 idempotency), the response is `{ job_id: <existing> }` and no fresh `job` event fires for that id (the job was already running). The next time `renderBases()` runs (triggered by something else — a `state` event, a periodic refresh, or another job's progress), `_addCommonMeta` re-creates the button with the correct state. But until then, the button stays at "starting…". The user sees a button that lies about the actual state. The catch branch restores `disabled` (L1111) but not textContent.
@@ -405,7 +405,7 @@ dlBtn.onclick = async () => {
 Frontend test: stub `wsRequest` to resolve without firing a job event, click the button, assert `dlBtn.textContent` is "downloading…" (per `_modelDlBtnState`) after the await resolves, not "starting…".
 
 ## [PR-07-D18] buildRestorePromptLine emits an invalid /lora line for multi-LoRA stacks (arity-1 parser drops all but the first)
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `static/restore_prompt.js:18` (`if (meta.loras) parts.push(\`/lora ${meta.loras.replace(/,/g, " ")}\`);`).
 **Description:** The PNG metadata records the LoRA stack as `loras="pixel-art-xl:0.8,ascii-art:0.7"` (comma-separated, per `generate.py:106`). `restore_prompt.js` replaces commas with spaces and emits a single `/lora pixel-art-xl:0.8 ascii-art:0.7` token. The current `/lora` parser is arity-1 (per the task ledger's "/lora: arity-1 parser" note from commit 53e4f25) — it accepts exactly one token after `/lora`. The second LoRA `ascii-art:0.7` becomes a tail token that the parser interprets as part of the prompt (it doesn't start with `/`, so it's appended to `prompt_acc`). Result: the restored generation has only one LoRA in the stack and "ascii-art:0.7" smuggled into the prompt text. Reproducible by saving an image with two LoRAs, clicking the restore (↻) button on its thumbnail, and inspecting the textarea content.

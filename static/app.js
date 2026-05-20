@@ -271,6 +271,17 @@ function renderQueue() {
         bar.appendChild(fill);
         li.appendChild(bar);
       }
+      if (j.status === "queued" || j.status === "running") {
+        const cancel = document.createElement("button");
+        cancel.className = "cancel-btn"; cancel.textContent = "✕";
+        cancel.title = "cancel download";
+        cancel.onclick = async () => {
+          cancel.disabled = true;
+          try { await wsRequest("job_cancel", { id: j.id }); }
+          catch (e) { appendLog(`cancel: ${e.message}`, "error"); cancel.disabled = false; }
+        };
+        li.appendChild(cancel);
+      }
     } else {
       const prompt = document.createElement("span"); prompt.className = "qprompt";
       prompt.textContent = (j.full_prompt || j.raw_prompt || "").slice(0, 200);

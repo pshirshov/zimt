@@ -17,6 +17,8 @@ Concurrency model:
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -24,8 +26,10 @@ from typing import Any
 
 from ..models.loras import LORAS
 from ..models.registry import MODELS
-from .downloads import clear_active_download, download_context, set_active_download
-from .state import Job, STATE
+from .downloads import (
+    DownloadCanceled, clear_active_download, download_context, set_active_download,
+)
+from .state import CANCEL_EVENTS, Job, STATE
 from .ws import broadcast, emit_job, emit_log
 
 _PREFETCH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="zimt-prefetch")
@@ -68,10 +72,22 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
         model=name,
     )
     STATE.jobs[job.id] = job
+    CANCEL_EVENTS[job.id] = threading.Event()
     await emit_job(job)
 
     async def _run() -> None:
         async with _PREFETCH_LOCK:
+            # Cancellation can arrive while we were parked on the lock; the
+            # controlled boundary for queued downloads is right here, before
+            # we flip status to running.
+            if CANCEL_EVENTS[job.id].is_set():
+                job.status = "canceled"
+                job.error = "canceled before start"
+                job.ts_done = datetime.now().timestamp()
+                CANCEL_EVENTS.pop(job.id, None)
+                await emit_job(job)
+                await emit_log(f"prefetch canceled before start: {name}")
+                return
             job.status = "running"
             await emit_job(job)
             try:
@@ -80,8 +96,11 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
                     await emit_log(f"download progress slot busy; prefetch of {name} progress will not be broadcast")
                 loop = asyncio.get_running_loop()
                 with download_context(job.id):
+                    ctx = contextvars.copy_context()
+                    repo_id = spec.repo_id
                     await loop.run_in_executor(
-                        _PREFETCH_EXECUTOR, _snapshot_download_sync, spec.repo_id,
+                        _PREFETCH_EXECUTOR,
+                        lambda: ctx.run(_snapshot_download_sync, repo_id),
                     )
                 job.status = "done"
                 job.ts_done = datetime.now().timestamp()
@@ -90,6 +109,12 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
                 await broadcast({"type": "model_prefetched",
                                  "kind": kind, "model": name,
                                  "repo_id": spec.repo_id})
+            except DownloadCanceled:
+                job.status = "canceled"
+                job.error = "canceled during download"
+                job.ts_done = datetime.now().timestamp()
+                await emit_job(job)
+                await emit_log(f"prefetch canceled: {name}")
             except Exception as e:
                 job.status = "error"
                 job.error = repr(e)
@@ -98,6 +123,7 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
                 await emit_log(f"prefetch failed for {name}: {e!r}", "error")
             finally:
                 clear_active_download(job.id)
+                CANCEL_EVENTS.pop(job.id, None)
 
     asyncio.create_task(_run())
     return job.id

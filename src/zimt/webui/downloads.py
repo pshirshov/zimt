@@ -18,14 +18,20 @@ slot at a time. Ownership is acquired with :func:`set_active_download`
 :func:`clear_active_download`. A concurrent download that cannot acquire
 the slot proceeds normally but its tqdm progress is not broadcast.
 
-Per-bar ownership: callers must wrap their executor invocations in
-:func:`download_context` (a context manager that sets a ``contextvars``
-var to the job id). Python copies the current context into
-``loop.run_in_executor`` worker threads, so ``ProgressTqdm`` bars
-created inside the worker capture the job id at construction time and
-silently drop all events if that id no longer matches the current slot
-owner. This prevents misattribution: a non-owning concurrent download's
-bars are no-ops rather than corrupting the owner's progress fields.
+Per-bar ownership: callers must wrap their executor invocations with
+both :func:`download_context` **and** an explicit ``copy_context``
+call — ``loop.run_in_executor`` in CPython does **not** copy the
+current ``contextvars.Context`` into the worker thread (only
+``asyncio.Task`` creation does). The required pattern is::
+
+    with download_context(job.id):
+        ctx = contextvars.copy_context()
+        await loop.run_in_executor(executor, ctx.run, func, *args)
+
+Without the explicit ``ctx.run`` wrapper ``_owner_var`` will be
+``None`` inside the worker, every ``ProgressTqdm`` bar will silently
+gate as non-owning, and no progress will be broadcast. Adding a new
+download path without this pattern is a silent regression.
 """
 
 from __future__ import annotations
@@ -39,6 +45,13 @@ from dataclasses import asdict
 from typing import Any, Optional
 
 from .state import Job, STATE
+
+
+class DownloadCanceled(Exception):
+    """Raised inside the HF download stack to abort at the next tqdm boundary
+    when the owning job's cancel event is set. Propagates up to the executor
+    and is caught in loader.load_model / prefetch.prefetch_model."""
+
 
 # The asyncio loop running the FastAPI app. Captured at startup so the
 # tqdm hook (which runs on a worker thread inside the HF download stack)
@@ -64,9 +77,10 @@ _owner_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 def download_context(job_id: str):
     """Mark the current asyncio/thread context as belonging to *job_id*.
 
-    Propagates through ``loop.run_in_executor`` (Python copies the
-    current ``contextvars.Context`` into the worker). tqdm bars created
-    inside this context capture *job_id* and only emit if it matches
+    Does **not** propagate automatically through ``loop.run_in_executor``.
+    Callers must use ``ctx = contextvars.copy_context()`` after entering
+    this context manager and dispatch via ``ctx.run``. tqdm bars created
+    inside the worker then capture *job_id* and only emit if it matches
     the current slot owner. See :func:`set_active_download`.
     """
     token = _owner_var.set(job_id)
@@ -141,12 +155,29 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
             # the base ever calls overridden methods during construction.
             self._zimt_owner = _owner_var.get()
             super().__init__(*args, **kwargs)
+            # tqdm callbacks are the only controlled cancellation boundary
+            # inside HF's snapshot_download — raise here so the executor
+            # surfaces DownloadCanceled before any further bytes are read.
+            self._zimt_check_cancel()
             self._emit()
 
         def update(self, n: int = 1) -> Any:  # noqa: D401
+            # Mirror the check at update time so a cancel arriving mid-file
+            # takes effect at the next tqdm event rather than waiting for
+            # the next file's __init__.
+            self._zimt_check_cancel()
             r = super().update(n)
             self._emit()
             return r
+
+        def _zimt_check_cancel(self) -> None:
+            jid = self._zimt_owner
+            if jid is None:
+                return
+            from .state import CANCEL_EVENTS
+            ev = CANCEL_EVENTS.get(jid)
+            if ev is not None and ev.is_set():
+                raise DownloadCanceled()
 
         def close(self) -> None:
             super().close()

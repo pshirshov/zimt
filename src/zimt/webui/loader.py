@@ -11,13 +11,17 @@ shows a live row with the current file + bytes — see
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import threading
 import uuid
 from datetime import datetime
 
 from ..generate import GenConfig, load_spec, unload
 from ..models.registry import MODELS
-from .downloads import clear_active_download, download_context, set_active_download
-from .state import EXECUTOR, Job, PIPE_LOCK, STATE
+from .downloads import (
+    DownloadCanceled, clear_active_download, download_context, set_active_download,
+)
+from .state import CANCEL_EVENTS, EXECUTOR, Job, PIPE_LOCK, STATE
 from .ws import broadcast, emit_job, emit_log, emit_state
 
 
@@ -76,6 +80,7 @@ async def load_model(name: str) -> None:
         model=name,
     )
     STATE.jobs[job.id] = job
+    CANCEL_EVENTS[job.id] = threading.Event()
     STATE.loading_model = name
     await emit_job(job)
     await emit_state()
@@ -85,6 +90,13 @@ async def load_model(name: str) -> None:
             await emit_log(f"download progress slot busy; {name} load progress will not be broadcast")
         logged_wait = False
         while _has_active_generation_jobs():
+            if CANCEL_EVENTS[job.id].is_set():
+                job.status = "canceled"
+                job.error = "canceled before load"
+                job.ts_done = datetime.now().timestamp()
+                await emit_job(job)
+                await emit_state()
+                return
             if not logged_wait:
                 await emit_log(f"waiting for active generations before loading {name}")
                 logged_wait = True
@@ -101,7 +113,23 @@ async def load_model(name: str) -> None:
             loop = asyncio.get_running_loop()
             try:
                 with download_context(job.id):
-                    await loop.run_in_executor(EXECUTOR, _do_load_sync, name)
+                    ctx = contextvars.copy_context()
+                    await loop.run_in_executor(
+                        EXECUTOR, lambda: ctx.run(_do_load_sync, name)
+                    )
+            except DownloadCanceled:
+                # User-initiated cancel — not a failure. Don't raise
+                # ModelLoadError; just leave the pipe unloaded and mark
+                # the job canceled.
+                STATE.pipe = None
+                STATE.g = None
+                job.status = "canceled"
+                job.error = "canceled during download"
+                job.ts_done = datetime.now().timestamp()
+                await emit_job(job)
+                await broadcast({"type": "model_load_canceled", "model": name})
+                await emit_state()
+                return
             except Exception as e:
                 STATE.pipe = None
                 STATE.g = None
@@ -119,6 +147,7 @@ async def load_model(name: str) -> None:
         await broadcast({"type": "model_loaded", "model": name})
     finally:
         clear_active_download(job.id)
+        CANCEL_EVENTS.pop(job.id, None)
         if STATE.loading_model == name:
             STATE.loading_model = None
             await emit_state()

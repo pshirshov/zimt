@@ -334,7 +334,7 @@ async def _rpc_job_cancel(params: dict[str, Any]) -> dict[str, Any]:
 async def _rpc_jobs_cancel_all(_params: dict[str, Any]) -> dict[str, Any]:
     count = 0
     for job_id, job in STATE.jobs.items():
-        if job.kind == "generate" and job.status in ("queued", "running"):
+        if job.kind in ("generate", "download") and job.status in ("queued", "running"):
             ev = CANCEL_EVENTS.get(job_id)
             if ev is not None and not ev.is_set():
                 ev.set()

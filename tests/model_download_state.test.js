@@ -164,6 +164,59 @@ function loadApp() {
   return context;
 }
 
+function findByClass(node, cls) {
+  if (!node) return null;
+  // The fake harness sets `className` as a string; `classList` is only
+  // populated by explicit classList.add() calls. Match either.
+  const cn = typeof node.className === "string" ? node.className : "";
+  const hitByName = cn.split(/\s+/).includes(cls);
+  const hitByList = node.classList && node.classList.contains
+    && node.classList.contains(cls);
+  if (hitByName || hitByList) return node;
+  if (node.children) {
+    for (const child of node.children) {
+      const hit = findByClass(child, cls);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+test("download queue row renders a cancel button when running and omits it when done", () => {
+  const app = loadApp();
+
+  app.onJob({
+    id: "dl-running",
+    kind: "download",
+    target_kind: "base",
+    status: "running",
+    model: "some-model",
+    download_file: "weights.bin",
+    download_n: 10,
+    download_total: 100,
+    download_files_done: 0,
+  });
+  const queueList = app.document.getElementById("queue-list");
+  const runningRow = queueList.children[0];
+  const cancelBtn = findByClass(runningRow, "cancel-btn");
+  assert.ok(cancelBtn, "expected cancel-btn on a running download row");
+
+  app.onJob({
+    id: "dl-done",
+    kind: "download",
+    target_kind: "base",
+    status: "done",
+    model: "some-model-2",
+    download_file: "weights.bin",
+    download_n: 100,
+    download_total: 100,
+    download_files_done: 1,
+  });
+  const doneRow = queueList.children[0]; // reverse order: newest first
+  assert.equal(findByClass(doneRow, "cancel-btn"), null,
+    "expected no cancel-btn on a completed download row");
+});
+
 test("model-tab active download lookup separates base and LoRA targets with the same name", () => {
   const app = loadApp();
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import os
 import threading
 import unittest
@@ -263,6 +264,138 @@ class DownloadOwnershipTests(StateCase):
                     raise RuntimeError("prefetch task did not finish after release")
 
 
+class DownloadCancelTests(StateCase):
+    async def test_queued_prefetch_canceled_before_run(self) -> None:
+        # Two prefetch jobs queue against the _PREFETCH_LOCK. We cancel the
+        # second while the first is still parked inside snapshot_download, then
+        # release the first and assert the second never invoked the downloader.
+        loop = asyncio.get_running_loop()
+        first_started = asyncio.Event()
+        release_first = threading.Event()
+        call_log: list[str] = []
+
+        def first_snapshot(_repo_id: str) -> None:
+            call_log.append("first")
+            loop.call_soon_threadsafe(first_started.set)
+            if not release_first.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release first prefetch")
+
+        def second_snapshot(_repo_id: str) -> None:
+            call_log.append("second")
+
+        # Patch dispatches based on call count: first invocation blocks, second
+        # would record execution (and must not run).
+        invocations = {"n": 0}
+
+        def dispatching_snapshot(repo_id: str) -> None:
+            invocations["n"] += 1
+            if invocations["n"] == 1:
+                first_snapshot(repo_id)
+            else:
+                second_snapshot(repo_id)
+
+        with patch.object(prefetch, "_snapshot_download_sync", dispatching_snapshot):
+            first_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            second_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            try:
+                await asyncio.wait_for(first_started.wait(), timeout=1)
+                # Cancel the queued second job before it acquires the lock.
+                ev = CANCEL_EVENTS.get(second_id)
+                self.assertIsNotNone(ev)
+                assert ev is not None
+                ev.set()
+            finally:
+                release_first.set()
+                # Drain both tasks.
+                for _ in range(100):
+                    first_job = STATE.jobs.get(first_id)
+                    second_job = STATE.jobs.get(second_id)
+                    if (first_job is not None
+                            and first_job.status in {"done", "error", "canceled"}
+                            and second_job is not None
+                            and second_job.status in {"done", "error", "canceled"}):
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    raise RuntimeError("prefetch tasks did not finish")
+
+        self.assertEqual(call_log, ["first"])
+        self.assertEqual(STATE.jobs[second_id].status, "canceled")
+
+    async def test_running_prefetch_canceled_at_tqdm_boundary(self) -> None:
+        # Drive a ProgressTqdm bar manually inside the patched snapshot fn.
+        # First update is fine; then we set the cancel event and the next
+        # update should raise DownloadCanceled.
+        from zimt.webui.downloads import DownloadCanceled
+
+        # Ensure the tqdm patch is installed against the running loop.
+        import sys
+        loop = asyncio.get_running_loop()
+        downloads.install(loop)
+        hf_tqdm_mod = sys.modules["huggingface_hub.utils.tqdm"]
+        ProgressTqdm = hf_tqdm_mod.tqdm
+
+        observed_exc: dict[str, BaseException | None] = {"e": None}
+
+        def driving_snapshot(_repo_id: str) -> None:
+            bar = ProgressTqdm(total=100, desc="weights.bin")
+            try:
+                bar.update(10)
+                ev = CANCEL_EVENTS[job_id]
+                ev.set()
+                bar.update(10)  # should raise DownloadCanceled
+            except DownloadCanceled as e:
+                observed_exc["e"] = e
+                raise
+            finally:
+                bar.close()
+
+        with patch.object(prefetch, "_snapshot_download_sync", driving_snapshot):
+            job_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            for _ in range(100):
+                job = STATE.jobs.get(job_id)
+                if job is not None and job.status in {"done", "error", "canceled"}:
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                raise RuntimeError("prefetch did not finish")
+
+        self.assertIsInstance(observed_exc["e"], DownloadCanceled)
+        self.assertEqual(STATE.jobs[job_id].status, "canceled")
+
+    async def test_cancel_all_covers_download_jobs(self) -> None:
+        # Park a prefetch on the _PREFETCH_LOCK, queue a generation job,
+        # then call jobs_cancel_all and check both cancel events fire.
+        loop = asyncio.get_running_loop()
+        prefetch_started = asyncio.Event()
+        release_prefetch = threading.Event()
+
+        def blocked_snapshot(_repo_id: str) -> None:
+            loop.call_soon_threadsafe(prefetch_started.set)
+            if not release_prefetch.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release blocked prefetch")
+
+        gen_job = Job(id="gen-1", kind="generate", status="queued")
+        STATE.jobs[gen_job.id] = gen_job
+        CANCEL_EVENTS[gen_job.id] = threading.Event()
+
+        with patch.object(prefetch, "_snapshot_download_sync", blocked_snapshot):
+            dl_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            try:
+                await asyncio.wait_for(prefetch_started.wait(), timeout=1)
+                result = await web_app._rpc_jobs_cancel_all({})
+                self.assertGreaterEqual(result["canceled"], 2)
+                self.assertTrue(CANCEL_EVENTS[dl_id].is_set())
+                self.assertTrue(CANCEL_EVENTS[gen_job.id].is_set())
+            finally:
+                release_prefetch.set()
+                for _ in range(100):
+                    job = STATE.jobs.get(dl_id)
+                    if job is not None and job.status in {"done", "error", "canceled"}:
+                        break
+                    await asyncio.sleep(0.02)
+
+
 class DownloadOwnershipApiTests(StateCase):
     def test_set_active_download_is_idempotent_for_same_owner(self) -> None:
         jid = "job-a"
@@ -274,6 +407,51 @@ class DownloadOwnershipApiTests(StateCase):
         self.assertEqual(downloads._active_job_id, jid)
         downloads.clear_active_download(jid)  # owner clears
         self.assertIsNone(downloads._active_job_id)
+
+
+class DownloadContextPropagationTests(StateCase):
+    async def test_owner_var_reaches_executor_worker_via_copy_context(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        captured: dict[str, str | None] = {}
+
+        def worker() -> None:
+            captured["owner"] = downloads._owner_var.get()
+
+        ex = ThreadPoolExecutor(max_workers=1)
+        try:
+            loop = asyncio.get_running_loop()
+            with downloads.download_context("job-xyz"):
+                ctx = contextvars.copy_context()
+                await loop.run_in_executor(ex, ctx.run, worker)
+        finally:
+            ex.shutdown(wait=True)
+        self.assertEqual(captured, {"owner": "job-xyz"})
+
+    async def test_progress_tqdm_captures_owner_inside_copy_context_worker(self) -> None:
+        # Prove that a ProgressTqdm bar created inside a ctx.run-dispatched
+        # worker receives the correct _zimt_owner (not None).
+        import sys
+        loop = asyncio.get_running_loop()
+        downloads.install(loop)
+        hf_tqdm_mod = sys.modules["huggingface_hub.utils.tqdm"]
+        ProgressTqdm = hf_tqdm_mod.tqdm
+
+        captured: dict[str, str | None] = {}
+
+        def worker() -> None:
+            bar = ProgressTqdm(total=10, desc="test.bin")
+            captured["owner"] = bar._zimt_owner
+            bar.close()
+
+        from concurrent.futures import ThreadPoolExecutor
+        ex = ThreadPoolExecutor(max_workers=1)
+        try:
+            with downloads.download_context("job-abc"):
+                ctx = contextvars.copy_context()
+                await loop.run_in_executor(ex, ctx.run, worker)
+        finally:
+            ex.shutdown(wait=True)
+        self.assertEqual(captured, {"owner": "job-abc"})
 
 
 class RegistryTests(unittest.TestCase):

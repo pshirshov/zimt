@@ -72,3 +72,27 @@ Status: `[ ]` open · `[~]` under fix · `[x]` resolved
 **Location:** `src/zimt/webui/downloads.py:64`.
 **Description:** `def download_context(job_id: str):  # type: ignore[return]` carries a pragma directed at a diagnostic code that pyright does not produce for a `@contextlib.contextmanager`-decorated generator with a one-shot `yield`. Round-2 review confirmed (by removing the comment and re-running pyright) that no `report*` diagnostic is suppressed — the pragma is dead code masquerading as required tooling appeasement.
 **Fix:** `src/zimt/webui/downloads.py:64` — `# type: ignore[return]` removed. Function signature is now plain `def download_context(job_id: str):`. Pyright verified clean (only the pre-existing tqdm monkey-patch finding at `downloads.py:181` remains, unchanged).
+
+## [PR-02-D10] download_context's contextvars do not propagate through loop.run_in_executor, making the per-bar gating non-functional in production
+**Status:** resolved
+**Severity:** major
+**Location:** `src/zimt/webui/loader.py:103-104` (`with download_context(job.id): await loop.run_in_executor(EXECUTOR, _do_load_sync, name)`), `src/zimt/webui/prefetch.py:82-85` (analogous), `src/zimt/webui/downloads.py:142,167,157` (the `_zimt_owner` capture and gates that depend on propagation).
+**Description:** PR-02-D01's fix relies on the assumption that the `contextvars.Context` set by `download_context(job_id)` propagates into the worker thread that `loop.run_in_executor` dispatches to. **This assumption is false.** Verified by repro:
+```python
+import asyncio, contextvars
+v = contextvars.ContextVar("v", default=None)
+def worker(): return v.get()
+async def main():
+    v.set("hello")
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, worker)
+print(asyncio.run(main()))  # prints: None
+```
+The CPython 3.13 `BaseEventLoop.run_in_executor` (`asyncio/base_events.py`) implementation is `executor.submit(func, *args)` with **no** `contextvars.copy_context()` wrapping. Only `asyncio.Task` creation propagates context; `run_in_executor` does not. Documented behavior, not a CPython bug. As a consequence, `ProgressTqdm.__init__`'s `self._zimt_owner = _owner_var.get()` (downloads.py:142) always sees the default `None` inside the worker, and the gates in `_emit` (downloads.py:167: `if jid is None or jid != self._zimt_owner: return`) and `close` (downloads.py:157) always evaluate True → all real tqdm events from HF are silently dropped. Net production behavior:
+- The D01 "cross-attribution" fix is non-functional; what actually happens is that **no** progress is broadcast at all from any real HF download, because every bar's `_zimt_owner` is None.
+- The model tab's download rows therefore show no live byte/file counters during real downloads (regression from pre-PR-02 behavior, where the slot owner at least saw its own bars).
+- The cross-attribution problem D01 claimed to fix is "fixed" only in the trivial sense that nothing is broadcast.
+The defect was missed by three rounds of adversarial review because every PR-02 test patched the executor payload (`_do_load_sync`, `_snapshot_download_sync`) to a function that does **not** create real tqdm bars, so the broken gate was never exercised. The DownloadOwnershipTests test reads `current_download()` which derives from `_active_job_id` (the slot, not the bar), so it passes regardless.
+PR-03's first execution surfaced this when its `_zimt_check_cancel` (which uses the same `_zimt_owner` capture) refused to fire; the subagent worked around it with a fallback to `_active_job_id`, but that workaround re-introduces D01 (cross-attribution across concurrent downloads would misattribute both progress *and* cancellation).
+**Root cause:** `loop.run_in_executor` in CPython does not copy contextvars into the worker thread. PR-02's design assumed it does. The docstring at `downloads.py:23-28` perpetuates the misconception ("Python copies the current context into ``loop.run_in_executor`` worker threads"); this is false.
+**Fix:** `src/zimt/webui/loader.py:14,116-119` and `src/zimt/webui/prefetch.py:20,97-103` now explicitly `ctx = contextvars.copy_context()` inside `with download_context(job.id):` and dispatch via `loop.run_in_executor(executor, lambda: ctx.run(func, ...))` (the lambda satisfies `run_in_executor`'s `Callable[[], R]` signature). `src/zimt/webui/downloads.py:21-30,72-78` — the module docstring and `download_context` docstring now correctly state that callers must use explicit `copy_context()` and dispatch via `ctx.run`; without that wrapper `_owner_var` will be `None` in the worker and all progress events will be silently dropped. `src/zimt/webui/downloads.py:166-173` — `ProgressTqdm._zimt_check_cancel` no longer falls back to `_active_job_id`; it returns immediately when `self._zimt_owner is None`, eliminating the D01 re-introduction the workaround would have caused. `tests/test_webui_service.py` — new `DownloadContextPropagationTests` class with two tests verifying (a) `_owner_var` set in asyncio context reaches the executor worker when dispatched via `ctx.run`, and (b) a `ProgressTqdm` constructed in the worker captures the correct `_zimt_owner`.

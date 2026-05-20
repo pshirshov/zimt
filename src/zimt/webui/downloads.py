@@ -39,12 +39,39 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import re
 import sys
 import threading
 from dataclasses import asdict
 from typing import Any, Optional
 
 from .state import Job, STATE
+
+# HF snapshot_download sets tqdm_desc to "Fetching N files" (numeric N) for the
+# normal case, "Fetching ... files" for the size-unknown case, and
+# "[dry-run] Fetching ... files" for dry runs.  All three should be treated as
+# the file-count bar regardless of their unit (which is tqdm's default 'it').
+# The regex is intentionally broad: match anything starting with an optional
+# "[dry-run] " prefix followed by the word "Fetching".
+_HF_FETCHING_FILES_RE = re.compile(r"^(?:\[dry-run\]\s*)?Fetching\b")
+
+
+def _classify(raw_unit: str, desc: str) -> str:
+    """Map HF tqdm's (unit, desc) pair to a UI-stable category.
+
+    HF snapshot_download uses two ProgressTqdm-subclass bars:
+      * unit='B' for the aggregate bytes bar (our "bytes" category).
+      * unit='it' (tqdm default) with desc='Fetching N files' for the
+        outer file-count thread_map bar — classified by desc, not unit.
+    Anything else is opaque "items".
+    """
+    if raw_unit == "B":
+        return "bytes"
+    if raw_unit in ("file", "files"):
+        return "files"
+    if _HF_FETCHING_FILES_RE.match(desc):
+        return "files"
+    return "items"
 
 
 class DownloadCanceled(Exception):
@@ -181,15 +208,15 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
 
         def close(self) -> None:
             super().close()
-            # Bump files_done on close so the UI can show "k files
-            # finished" even when total is unknown.
             with _active_lock:
                 jid = _active_job_id
             if jid is None or jid != self._zimt_owner:
                 return
             job = STATE.jobs.get(jid)
             if job is not None and job.kind == "download":
-                job.download_files_done += 1
+                # download_files_done is tracked exclusively via the
+                # file-count bar's _emit (its current `n` value); close()
+                # does not mutate it. See _classify.
                 _schedule_emit(job)
 
         def _emit(self) -> None:
@@ -202,11 +229,18 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
                 return
             desc = (getattr(self, "desc", "") or "").strip()
             job.download_file = desc or job.download_file
+            cat = _classify(getattr(self, "unit", "") or "", desc)
+            job.download_unit = cat
             try:
                 job.download_n = int(self.n or 0)
                 job.download_total = int(self.total or 0)
             except (TypeError, ValueError):
                 pass
+            if cat == "files":
+                try:
+                    job.download_files_done = int(self.n or 0)
+                except (TypeError, ValueError):
+                    pass
             _schedule_emit(job)
 
     hf_tqdm_mod.tqdm = ProgressTqdm

@@ -240,3 +240,53 @@ test("model-tab active download lookup separates base and LoRA targets with the 
   assert.equal(baseDownloads.get("shared-name").id, "base-download");
   assert.equal(loraDownloads.has("shared-name"), false);
 });
+
+test("download counter formats byte unit as bytes", () => {
+  const app = loadApp();
+  const out = app.fmtDownloadCounter({
+    download_unit: "bytes",
+    download_n: 1024,
+    download_total: 4096,
+  });
+  assert.equal(out, "1.0 KB / 4.0 KB");
+});
+
+test("download counter formats file unit with files label", () => {
+  const app = loadApp();
+  const out = app.fmtDownloadCounter({
+    download_unit: "files",
+    download_n: 3,
+    download_total: 7,
+  });
+  assert.equal(out, "3 / 7 files");
+});
+
+test("download counter formats items unit as plain numbers", () => {
+  const app = loadApp();
+  const out = app.fmtDownloadCounter({
+    download_unit: "items",
+    download_n: 2,
+    download_total: 5,
+  });
+  assert.equal(out, "2 / 5");
+});
+
+test("download counter without unit and zero counters returns empty", () => {
+  const app = loadApp();
+  const out = app.fmtDownloadCounter({
+    download_unit: "",
+    download_n: 0,
+    download_total: 0,
+  });
+  assert.equal(out, "");
+});
+
+test("download counter without unit but with counters returns plain numbers, NOT bytes", () => {
+  const app = loadApp();
+  const out = app.fmtDownloadCounter({
+    download_unit: "",
+    download_n: 5,
+    download_total: 10,
+  });
+  assert.equal(out, "5 / 10");
+});

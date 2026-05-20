@@ -20,7 +20,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`. One 
 - [x] **PR-01** — Introduce base/LoRA download target identity.
 - [x] **PR-02** — Make download progress ownership job-scoped.
 - [x] **PR-03** — Add cancellation semantics for download jobs.
-- [ ] **PR-04** — Normalize Hugging Face progress units.
+- [x] **PR-04** — Normalize Hugging Face progress units.
 - [ ] **PR-05** — Prevent untracked LoRA downloads during generation.
 - [ ] **PR-06** — Consolidate model-tab download state transitions.
 
@@ -43,7 +43,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 - [x] Download jobs need asset identity separate from queue job type: `kind="download"` remains the queue discriminator; `target_kind` distinguishes base-model assets from LoRA assets. Lands in PR-01.
 - [x] Download progress ownership invariant — at most one HF download owns the progress slot at a time, acquired by job id via `set_active_download` and released by the same id via `clear_active_download`. Per-bar identity is propagated to executor workers via a `contextvars.ContextVar` (`download_context(job_id)`); callers MUST use `ctx = contextvars.copy_context()` and dispatch via `loop.run_in_executor(executor, lambda: ctx.run(func, *args))` — `run_in_executor` does NOT propagate contextvars on its own (CPython 3.13). tqdm bars constructed in the worker capture the owner id and silently drop events when it does not match the slot. Loser callers receive a passive busy state via `emit_log`; a row-level "busy" indicator is deferred to PR-06. Lands in PR-02 (D10 fix landed in PR-03 to satisfy the production assumption).
 - [x] Download cancellation invariant — each download job (`load_model` and `prefetch_model`) registers a `threading.Event` in `CANCEL_EVENTS` at Job creation and pops it on exit. Cancellation observed at controlled boundaries: loader's pre-load polling loop, prefetch's post-`_PREFETCH_LOCK` checkpoint, and `ProgressTqdm.__init__` / `update` (raises `DownloadCanceled` which is caught in both callers and ends the job with status `canceled`). `jobs_cancel_all` RPC covers both `generate` and `download` kinds. The UI renders a cancel button on queued and running download rows. Lands in PR-03.
-- [ ] Progress unit invariant — decide and encode in PR-04: counters render only with units proven by the progress event.
+- [x] Progress unit invariant — every progress event carries an explicit unit category (`"bytes"` | `"files"` | `"items"` | `""`) on `Job.download_unit`. Classification: HF's byte aggregate bar (`unit='B'`) is `"bytes"`; HF's outer file-count bar (`unit='it'` default, identified by `desc` regex `^(?:\[dry-run\]\s*)?Fetching\b`) is `"files"`; any other tqdm event is `"items"`. The UI never claims byte semantics without `unit=='B'` evidence. `download_files_done` is driven exclusively by the file-count bar's current `n` (overwrite in `_emit`, never mutated by `close()`); without a file-count bar it stays 0. Lands in PR-04.
 - [ ] LoRA dependency invariant — decide and encode in PR-05: generation must not initiate implicit Hugging Face downloads.
 
 ---
@@ -227,3 +227,61 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
     module docstring.
   - Pre-existing `LoaderTests` failure (HTTPException vs ModelLoadError)
     remains unchanged; not in PR-03's scope.
+
+- **PR-04** (2026-05-20) — HuggingFace progress now carries an explicit
+  unit category so the UI never claims byte semantics for file-count
+  progress. New `Job.download_unit` field with values `"bytes"` |
+  `"files"` | `"items"` | `""`. `ProgressTqdm._emit` classifies each
+  event via `_classify(raw_unit, desc)`: `unit=='B'` → `"bytes"`;
+  hand-built `unit in {'file','files'}` → `"files"`; otherwise if `desc`
+  matches `_HF_FETCHING_FILES_RE` (`^(?:\[dry-run\]\s*)?Fetching\b`,
+  covering all four HF `tqdm_desc` variants) → `"files"`; else
+  `"items"`. The byte-unit check runs first so a hypothetical byte bar
+  with a "Fetching…" desc still classifies as bytes. `download_files_done`
+  is now driven by the file-count bar's current `n` via overwrite in
+  `_emit`; `close()` was changed to no longer mutate the counter at all
+  (the pre-PR-04 code incremented on every close, which was wrong both
+  for snapshot_download — exactly one byte-bar close per snapshot — and
+  conceptually). The frontend `fmtDownloadCounter(j)` formats per unit:
+  bytes via `fmtBytes`, files as `"N / T files"`, items as bare numbers,
+  no-unit as bare numbers (never bytes).
+  Reproduction before fix:
+  - PR-04 work-in-progress introduced `_normalize_unit` keyed only on
+    the tqdm `unit` attribute. Adversarial review verified against the
+    installed `huggingface_hub`'s `_snapshot_download.py` that the outer
+    file-count bar HF emits is `unit='it'` (tqdm default) — so PR-04's
+    initial test that constructed `unit='file'` passed but never
+    exercised the production path. Defect logged as PR-04-D01.
+  Verification:
+  - `LD_LIBRARY_PATH=...HF_XET_HIGH_PERFORMANCE=1 .venv/bin/python -m unittest tests.test_webui_service.ProgressUnitTests`
+    → pass, 4 tests (including the new combined-bar integration test).
+  - `.venv/bin/python -m unittest discover -s tests` → 26 tests, 25 pass,
+    1 pre-existing failure unchanged (`LoaderTests.test_failed_load_...`).
+  - `node --test tests/*.test.js` → 16/16 pass (5 new frontend
+    `fmtDownloadCounter` cases covering bytes / files / items / no-unit
+    with and without counters).
+  - `nix develop --command pyright src/zimt` → only the pre-existing
+    tqdm monkey-patch finding remains; no new findings.
+  Review:
+  - Two rounds of adversarial review. Round 1 flagged PR-04-D01:
+    `_normalize_unit` keyed on the wrong attribute and `close()`
+    incremented `download_files_done` on a bar that does not represent
+    one file (the snapshot-aggregate byte bar). Round 2 verified the
+    fix — `_classify` by desc, files_done driven by the file-count
+    bar's `n`, close() no longer mutating files_done.
+  Notes / constraints:
+  - The `_HF_FETCHING_FILES_RE` regex is deliberately broad (matches
+    `[dry-run]` prefix and `Fetching …` without explicit digits). If a
+    future HF release changes the desc wording, the bar will silently
+    fall back to `"items"` and `download_files_done` will read 0 even
+    when files are completing. Maintainer should re-verify the regex
+    against new HF versions when bumping the `huggingface_hub` pin.
+  - During a real `snapshot_download` both the file-count bar and the
+    byte bar fire alternately. `Job` carries a single `download_n` /
+    `download_total` / `download_unit` slot, so the UI flickers between
+    file-mode and byte-mode labels and the progress bar fill width
+    oscillates between file-percent and byte-percent. PR-06 (Consolidate
+    model-tab download state transitions) is scoped to introduce a
+    coherent state model for this; PR-04 leaves it as-is per scope.
+  - Pre-existing `LoaderTests` failure (HTTPException vs ModelLoadError)
+    remains unchanged; not in PR-04's scope.

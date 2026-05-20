@@ -237,6 +237,25 @@ function fmtBytes(n) {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function fmtDownloadCounter(j) {
+  const unit = j.download_unit || "";
+  const n = j.download_n || 0;
+  const t = j.download_total || 0;
+  if (unit === "bytes") {
+    return t > 0 ? `${fmtBytes(n)} / ${fmtBytes(t)}` : fmtBytes(n);
+  }
+  if (unit === "files") {
+    return t > 0 ? `${n} / ${t} files` : `${n} files`;
+  }
+  if (unit === "items") {
+    return t > 0 ? `${n} / ${t}` : `${n}`;
+  }
+  // No unit yet — bar hasn't fired or job is fresh. Don't claim byte
+  // semantics; show the bare count if any.
+  if (n > 0 || t > 0) return t > 0 ? `${n} / ${t}` : `${n}`;
+  return "";
+}
+
 function renderQueue() {
   const root = $("queue-list");
   root.innerHTML = "";
@@ -250,10 +269,10 @@ function renderQueue() {
     if (j.kind === "download") {
       const label = document.createElement("span"); label.className = "qprompt";
       const file = j.download_file || "(starting)";
-      const bytes = j.download_total
-        ? `${fmtBytes(j.download_n)} / ${fmtBytes(j.download_total)}`
-        : fmtBytes(j.download_n);
-      label.textContent = `${j.model}  ·  ${file}  ·  ${bytes}`;
+      const counter = fmtDownloadCounter(j);
+      label.textContent = counter
+        ? `${j.model}  ·  ${file}  ·  ${counter}`
+        : `${j.model}  ·  ${file}`;
       label.title = label.textContent;
       li.appendChild(label);
       if (j.download_files_done > 0) {
@@ -265,7 +284,7 @@ function renderQueue() {
         const bar = document.createElement("div");
         bar.className = "qprogress";
         const pct = Math.min(100, Math.round(100 * j.download_n / j.download_total));
-        bar.title = `${pct}%`;
+        bar.title = counter || `${pct}%`;
         const fill = document.createElement("div");
         fill.style.width = pct + "%";
         bar.appendChild(fill);

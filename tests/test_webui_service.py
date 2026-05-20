@@ -454,6 +454,106 @@ class DownloadContextPropagationTests(StateCase):
         self.assertEqual(captured, {"owner": "job-abc"})
 
 
+class ProgressUnitTests(StateCase):
+    def _progress_tqdm(self):
+        import sys
+        # Install with a fresh, immediately-closed loop so _schedule_emit
+        # no-ops (closed-loop branch); we only want STATE mutation here.
+        loop = asyncio.new_event_loop()
+        loop.close()
+        downloads.install(loop)
+        return sys.modules["huggingface_hub.utils.tqdm"].tqdm
+
+    def _setup_job(self, jid: str) -> Job:
+        job = Job(id=jid, kind="download", target_kind="base", model="m")
+        STATE.jobs[jid] = job
+        CANCEL_EVENTS[jid] = threading.Event()
+        downloads.set_active_download(jid)
+        return job
+
+    def test_byte_tqdm_event_sets_unit_bytes_and_does_not_change_files_done_on_close(self) -> None:
+        ProgressTqdm = self._progress_tqdm()
+        job = self._setup_job("byte-job")
+        try:
+            with downloads.download_context(job.id):
+                bar = ProgressTqdm(total=12345, desc="model.safetensors", unit="B")
+                bar.update(100)
+                self.assertEqual(STATE.jobs[job.id].download_unit, "bytes")
+                self.assertEqual(STATE.jobs[job.id].download_n, 100)
+                self.assertEqual(STATE.jobs[job.id].download_total, 12345)
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 0)
+                bar.close()
+                # close() no longer mutates download_files_done; it stays 0.
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 0)
+        finally:
+            downloads.clear_active_download(job.id)
+
+    def test_file_count_tqdm_event_classified_via_desc_and_drives_files_done(self) -> None:
+        # HF emits unit='it' (tqdm default) for the outer "Fetching N files"
+        # thread_map bar.  Classification must use desc, not unit.
+        ProgressTqdm = self._progress_tqdm()
+        job = self._setup_job("file-job")
+        try:
+            with downloads.download_context(job.id):
+                bar = ProgressTqdm(total=7, desc="Fetching 7 files", unit="it")
+                bar.update(3)
+                self.assertEqual(STATE.jobs[job.id].download_unit, "files")
+                self.assertEqual(STATE.jobs[job.id].download_n, 3)
+                self.assertEqual(STATE.jobs[job.id].download_total, 7)
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
+                bar.close()
+                # close() does not mutate download_files_done.
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
+        finally:
+            downloads.clear_active_download(job.id)
+
+    def test_combined_files_bar_and_bytes_bar_drive_job_state_correctly(self) -> None:
+        # Models the real HF snapshot_download interleaving: outer
+        # "Fetching N files" bar (unit='it', desc matches regex) plus
+        # an aggregate bytes bar (unit='B').
+        ProgressTqdm = self._progress_tqdm()
+        job = self._setup_job("combined-job")
+        try:
+            with downloads.download_context(job.id):
+                outer = ProgressTqdm(total=7, desc="Fetching 7 files", unit="it")
+                outer.update(3)
+                self.assertEqual(STATE.jobs[job.id].download_unit, "files")
+                self.assertEqual(STATE.jobs[job.id].download_n, 3)
+                self.assertEqual(STATE.jobs[job.id].download_total, 7)
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
+
+                inner = ProgressTqdm(total=100_000, desc="model.safetensors", unit="B")
+                inner.update(1024)
+                self.assertEqual(STATE.jobs[job.id].download_unit, "bytes")
+                self.assertEqual(STATE.jobs[job.id].download_n, 1024)
+                # bytes bar must NOT change download_files_done — still 3 from outer.
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
+
+                inner.close()
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
+
+                outer.update(4)
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 7)
+                outer.close()
+                # close() never mutates download_files_done.
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 7)
+        finally:
+            downloads.clear_active_download(job.id)
+
+    def test_unknown_unit_tqdm_event_normalizes_to_items_and_does_not_bump_files_done(self) -> None:
+        ProgressTqdm = self._progress_tqdm()
+        job = self._setup_job("item-job")
+        try:
+            with downloads.download_context(job.id):
+                bar = ProgressTqdm(total=5, desc="something", unit="it")
+                bar.update(2)
+                self.assertEqual(STATE.jobs[job.id].download_unit, "items")
+                bar.close()
+                self.assertEqual(STATE.jobs[job.id].download_files_done, 0)
+        finally:
+            downloads.clear_active_download(job.id)
+
+
 class RegistryTests(unittest.TestCase):
     def test_added_adult_models_use_distinct_diffusers_repositories(self) -> None:
         expected = {

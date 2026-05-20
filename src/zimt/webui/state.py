@@ -61,6 +61,9 @@ class Job:
     download_file: str = ""
     download_n: int = 0
     download_total: int = 0
+    # Unit for download_n/download_total reported by HF's tqdm:
+    # "bytes" | "files" | "items" | "" (no bar event yet).
+    download_unit: str = ""
     download_files_done: int = 0
 
 

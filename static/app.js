@@ -1023,6 +1023,66 @@ function onGpuStats(s) {
   }
 }
 
+// ---------- GPU pill dropdown menu (unload model, …) ----------
+function _setGpuMenu(open) {
+  const pill = $("gpu-stats");
+  const menu = $("gpu-menu");
+  if (!pill || !menu) return;
+  pill.setAttribute("aria-expanded", open ? "true" : "false");
+  menu.hidden = !open;
+  if (open) {
+    // Refresh the unload item's enabled-state on each open. A model
+    // must be loaded; the backend also refuses while generations
+    // are in flight, but the user-visible signal is "no model" only.
+    const unload = $("gpu-menu-unload");
+    if (unload) {
+      unload.disabled = !(state && state.loaded);
+      unload.title = unload.disabled ? "no model is currently loaded" : "release the pipeline and free device memory";
+    }
+  }
+}
+
+function _initGpuMenu() {
+  if (typeof document === "undefined" ||
+      typeof document.addEventListener !== "function") return;
+  const pill = $("gpu-stats");
+  const menu = $("gpu-menu");
+  const unload = $("gpu-menu-unload");
+  if (!pill || !menu || !unload) return;
+  pill.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    _setGpuMenu(menu.hidden);
+  });
+  pill.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      _setGpuMenu(menu.hidden);
+    } else if (ev.key === "Escape") {
+      _setGpuMenu(false);
+    }
+  });
+  unload.addEventListener("click", async () => {
+    _setGpuMenu(false);
+    try {
+      const r = await wsRequest("model_unload");
+      if (r && r.reason) appendLog(r.reason);
+      else appendLog("model unloaded");
+    } catch (e) {
+      appendLog(`unload: ${e.message}`, "error");
+    }
+  });
+  // Click anywhere outside the menu (or press Escape globally) closes it.
+  document.addEventListener("click", (ev) => {
+    if (menu.hidden) return;
+    if (menu.contains(ev.target) || pill.contains(ev.target)) return;
+    _setGpuMenu(false);
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !menu.hidden) _setGpuMenu(false);
+  });
+}
+_initGpuMenu();
+
 // ---------- left-column tab switcher (inference / models) ----------
 let leftTab = "inference";
 let modelsBases = [];

@@ -50,7 +50,7 @@ from .models_info import models_info
 from .outputs import list_outputs, read_png_meta, resolve_output, safe_name
 from .prefetch import PrefetchError, prefetch_model
 from .rpc import dispatch, method, rpc_error
-from .state import CANCEL_EVENTS, EXECUTOR, STATE, register_task
+from .state import CANCEL_EVENTS, EXECUTOR, PIPE_LOCK, STATE, register_task
 from .ws import broadcast, emit_job, emit_state
 
 app = FastAPI()
@@ -245,6 +245,32 @@ async def _rpc_model_switch(params: dict[str, Any]) -> dict[str, Any]:
     except ModelLoadError as e:
         raise rpc_error(str(e))
     return STATE.state_dict()
+
+
+@method("model_unload")
+async def _rpc_model_unload(_params: dict[str, Any]) -> dict[str, Any]:
+    """Release the currently-loaded pipeline and free device memory.
+
+    No-op when no model is loaded. Held under :data:`PIPE_LOCK` so it
+    can't race a concurrent generation; refuses if a generation is
+    in flight (the user must cancel-all first).
+    """
+    if STATE.pipe is None:
+        return {"ok": True, "reason": "no model loaded"}
+    if any(j.status in ("queued", "running") and j.kind == "generate"
+           for j in STATE.jobs.values()):
+        raise rpc_error("cannot unload while generations are in flight; cancel them first")
+    async with PIPE_LOCK:
+        if STATE.pipe is None:
+            return {"ok": True, "reason": "no model loaded"}
+        from ..generate import unload as _unload_pipe
+        pipe = STATE.pipe
+        STATE.pipe = None
+        STATE.g = None
+        _unload_pipe(pipe)
+    await emit_state()
+    await broadcast({"type": "model_unloaded"})
+    return {"ok": True}
 
 
 @method("models_info")

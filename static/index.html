@@ -23,7 +23,13 @@
       </div>
       <span id="ws-state" class="pill">disconnected</span>
       <span id="model-state" class="pill">no model</span>
-      <span id="gpu-stats" class="pill gpu-pill" title=""></span>
+      <span id="gpu-stats" class="pill gpu-pill" title="" role="button" tabindex="0"
+            aria-haspopup="menu" aria-expanded="false"></span>
+      <div id="gpu-menu" class="gpu-menu" role="menu" hidden>
+        <button type="button" id="gpu-menu-unload" class="gpu-menu-item" role="menuitem">
+          unload model
+        </button>
+      </div>
     </div>
 
     <div class="lpane lpane-inference" data-ltab="inference">

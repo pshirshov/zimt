@@ -152,7 +152,21 @@
   .hl-unknown-cmd { color: var(--error); text-decoration: underline wavy; }
 
   /* GPU stats pill sits on the right edge of the topbar. */
-  .gpu-pill { margin-left: auto; font-family: ui-monospace, monospace; }
+  .gpu-pill { margin-left: auto; font-family: ui-monospace, monospace;
+              cursor: pointer; }
+  .gpu-pill[aria-expanded="true"] { background: var(--accent); color: #000; }
+
+  /* Dropdown menu anchored to the gpu pill (top-right of viewport). */
+  .gpu-menu { position: absolute; top: 36px; right: 8px;
+              background: var(--panel); border: 1px solid var(--border);
+              border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+              z-index: 50; min-width: 140px; padding: 4px 0;
+              font-size: 12px; }
+  .gpu-menu-item { display: block; width: 100%; text-align: left;
+                   padding: 6px 12px; background: none; border: none;
+                   color: inherit; font: inherit; cursor: pointer; }
+  .gpu-menu-item:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+  .gpu-menu-item:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* Mobile tabs: hidden on desktop, shown below the breakpoint. They
      toggle which pane (.left / .right) is visible. The body gets a

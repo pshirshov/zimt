@@ -1365,3 +1365,39 @@ class NonSdxlLoraTests(unittest.TestCase):
         self.assertIn("pixel-art-xl", combined)
         # Pipeline must not have been touched (no load_lora_weights call).
         pipe.load_lora_weights.assert_not_called()
+
+
+class ModelUnloadTests(StateCase):
+    """RPC handler that releases the loaded pipeline on user request."""
+
+    async def test_model_unload_rpc_clears_pipe_and_g(self) -> None:
+        from zimt.webui.app import _rpc_model_unload
+        STATE.pipe = MagicMock()
+        STATE.g = _config_for("z-image-turbo")
+        with patch("zimt.generate.unload"):
+            result = await _rpc_model_unload({})
+        self.assertEqual(result, {"ok": True})
+        self.assertIsNone(STATE.pipe)
+        self.assertIsNone(STATE.g)
+
+    async def test_model_unload_rpc_is_noop_when_no_model_loaded(self) -> None:
+        from zimt.webui.app import _rpc_model_unload
+        STATE.pipe = None
+        STATE.g = None
+        result = await _rpc_model_unload({})
+        self.assertEqual(result.get("ok"), True)
+        self.assertEqual(result.get("reason"), "no model loaded")
+
+    async def test_model_unload_rpc_refuses_with_in_flight_generation(self) -> None:
+        from zimt.webui.app import _rpc_model_unload
+        from zimt.webui.state import Job
+        STATE.pipe = MagicMock()
+        STATE.g = _config_for("z-image-turbo")
+        gen_job = Job(id="g1", kind="generate", status="running")
+        STATE.jobs[gen_job.id] = gen_job
+        with self.assertRaises(Exception) as ctx:
+            await _rpc_model_unload({})
+        self.assertIn("cannot unload", str(ctx.exception).lower())
+        # Pipe and config must NOT have been cleared.
+        self.assertIsNotNone(STATE.pipe)
+        self.assertIsNotNone(STATE.g)

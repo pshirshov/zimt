@@ -9,11 +9,14 @@ stay identical.
 from __future__ import annotations
 
 import gc
+import logging
 import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
+
+_log = logging.getLogger(__name__)
 
 import torch
 from PIL.PngImagePlugin import PngInfo
@@ -121,8 +124,15 @@ def _apply_lora_stack(pipe: Any, g: GenConfig) -> None:
     stack so we can skip set_adapters when the stack hasn't changed.
     """
     if g.spec.family != "sdxl":
-        # ZImagePipeline doesn't currently expose set_adapters; silently
-        # ignore the stack rather than erroring on every generate.
+        # ZImagePipeline doesn't currently expose set_adapters.
+        if g.lora_stack:
+            _log.warning(
+                "lora: family=%s does not support LoRA stacking; "
+                "%d adapter(s) in stack will be ignored: %s",
+                g.spec.family,
+                len(g.lora_stack),
+                ", ".join(name for name, _ in g.lora_stack),
+            )
         return
     if g.lora_stack:
         from .webui.models_info import is_installed

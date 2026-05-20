@@ -82,9 +82,12 @@ def _auth_matches(auth_header: str, token: str) -> bool:
     return hmac.compare_digest(password, token)
 
 
-def _origin_allowed(origin: str, host: str) -> bool:
+def _origin_allowed(origin: str, host: str, *, require_origin: bool = False) -> bool:
     if not origin:
-        return True
+        # Browsers omit Origin on top-level navigations (GET /, static files).
+        # Non-browser RPC callers must always send Origin; when require_origin
+        # is True (WS handshake) an empty Origin is rejected.
+        return not require_origin
     same_host = {f"http://{host}", f"https://{host}"}
     configured = os.environ.get("ZIMT_ALLOWED_ORIGINS", "")
     if configured:
@@ -93,10 +96,10 @@ def _origin_allowed(origin: str, host: str) -> bool:
     return origin in same_host
 
 
-def _request_permitted(headers: Any) -> bool:
+def _request_permitted(headers: Any, *, require_origin: bool = False) -> bool:
     host = headers.get("host", "")
     origin = headers.get("origin", "")
-    if not _origin_allowed(origin, host):
+    if not _origin_allowed(origin, host, require_origin=require_origin):
         return False
     return _auth_matches(headers.get("authorization", ""), _web_auth_token())
 
@@ -417,10 +420,13 @@ async def _rpc_outputs_cleanup(_params: dict[str, Any]) -> dict[str, Any]:
             if name.startswith(".") or not name.lower().endswith(".png"):
                 continue
             path = os.path.join(OUT_DIR, name)
-            if not os.path.isfile(path):
+            if os.path.islink(path) or not os.path.isfile(path):
+                # Skip symlinks: os.path.isfile follows symlinks and would
+                # allow os.remove to delete a target outside OUT_DIR. We only
+                # want to delete real regular files.
                 continue
             try:
-                os.remove(path)
+                os.unlink(path)
                 deleted += 1
             except OSError:
                 pass
@@ -448,7 +454,9 @@ PONG_TIMEOUT_S = 10.0
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
-    if not _request_permitted(ws.headers):
+    # WS handshakes are RPC entry-points; require an Origin header so that
+    # non-browser clients without Origin are rejected (empty-Origin bypass fix).
+    if not _request_permitted(ws.headers, require_origin=True):
         await ws.close(code=1008)
         return
     await ws.accept()

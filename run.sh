@@ -14,7 +14,10 @@ cd "$(dirname "$0")"
 # ``/run/opengl-driver/lib/``. Without that on LD_LIBRARY_PATH the
 # loader fails with ``ZE_RESULT_ERROR_UNINITIALIZED`` and
 # ``torch.xpu.device_count()`` silently reports 0.
-export LD_LIBRARY_PATH=/nix/store/si4q3zks5mn5jhzzyri9hhd3cv789vlm-gcc-15.2.0-lib/lib:/run/opengl-driver/lib
+# Derive the gcc-lib path at runtime so this script is not tied to a specific
+# Nix store hash (which changes with every GCC version bump or Nixpkgs update).
+GCC_LIB=$(nix eval --raw nixpkgs#gcc.cc.lib.outPath 2>/dev/null || true)
+export LD_LIBRARY_PATH="${GCC_LIB:+${GCC_LIB}/lib:}/run/opengl-driver/lib"
 export OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors
 
 # HF cache lives in the project dir (sandbox can only write here / /tmp/exchange).

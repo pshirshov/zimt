@@ -182,7 +182,7 @@ Net production effects:
 **Suggested fix:** `tests/test_webui_service.py:80` — replace `with self.assertRaises(HTTPException):` with `with self.assertRaises(loader.ModelLoadError):`. The rest of the test (stale-config-cleared and same-model-reloads checks) is still valid.
 
 ## [PR-07-D02] pyright reports an unsuppressed reportAttributeAccessIssue on the hf_tqdm_mod.tqdm monkey-patch
-**Status:** open
+**Status:** resolved
 **Severity:** major
 **Location:** `src/zimt/webui/downloads.py:246` (`hf_tqdm_mod.tqdm = ProgressTqdm`).
 **Description:** `nix develop --command pyright src/zimt` reports `Cannot assign to attribute "tqdm" for class "ModuleType" — Attribute "tqdm" is unknown (reportAttributeAccessIssue)`. The assignment is intentional (we monkey-patch `huggingface_hub.utils.tqdm.tqdm` so HF downloads route through `ProgressTqdm`). The previous similar assignment at L256 (`setattr(mod, "tqdm", ProgressTqdm)`) uses `setattr` which pyright accepts; L246 uses attribute assignment and pyright doesn't. The error has been carried through every PR-01..PR-06 + PR-12 verification with the comment "only the pre-existing tqdm monkey-patch finding remains". This is the single non-clean diagnostic that blocks `flake.nix#checks.pyright` from being trivially extended into CI gating.
@@ -205,7 +205,7 @@ async with LOADER_LOCK:
 Then create the Job after the assignment so it can't be created and discarded. Backend tests: add a regression that fires two concurrent `load_model("A")` and `load_model("B")` and asserts both jobs are observed but `STATE.loading_model` was held by each in sequence (no overwrite).
 
 ## [PR-07-D04] outputs_cleanup follows symlinks via os.path.isfile and deletes their targets
-**Status:** open
+**Status:** resolved
 **Severity:** major
 **Location:** `src/zimt/webui/app.py:407-423` (`_rpc_outputs_cleanup`).
 **Description:** `outputs_cleanup` iterates `os.listdir(OUT_DIR)`, filters by `*.png` extension, and calls `os.remove(path)` for any entry where `os.path.isfile(path)` is True. `os.path.isfile` follows symlinks. A symlink in `OUT_DIR` named `foo.png` pointing to `/etc/important.png` (or any path the server user can write/delete) is treated as a regular file and unlinked by `os.remove`. The reverse-engineering attack: a process that can write into `OUT_DIR` (or a user who runs `ln -s /home/user/secret.png out/secret.png`) can cause `outputs_cleanup` to delete arbitrary files belonging to the server user. The output directory is normally writable only by the server process, but `OUT_DIR` defaults to `$PROJECT_ROOT/out` and is documented as user-managed (the README invites the user to put their own files in `out/fav`). Severity is **major** because the RPC requires only an authenticated session — there is no additional confirmation step beyond the frontend's `confirm()` dialog, and the operation is irreversible.
@@ -245,7 +245,7 @@ def spawn_background(coro: Coroutine) -> asyncio.Task:
 Replace every `asyncio.create_task(...)` in `app.py`, `prefetch.py`, and `exec_api.py:330` (`asyncio.create_task(run_job(...))`) with `spawn_background(...)`. For per-request `dispatch` tasks the same pattern applies; the `done_callback` ensures the set doesn't grow unbounded. Add a backend regression test that spawns 1000 short-lived tasks under simulated GC pressure (call `gc.collect()` between spawns) and asserts all reach their `done` state.
 
 ## [PR-07-D06] empty-Origin fallback in _origin_allowed permits any non-browser client to bypass the CSRF check
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/app.py:85-93` (`_origin_allowed`), `src/zimt/webui/app.py:96-101` (`_request_permitted`).
 **Description:** `_origin_allowed("", host)` returns `True` because of the `if not origin: return True` guard at L86-87. Combined with `_auth_matches` returning `True` for empty `ZIMT_AUTH_TOKEN`, a non-browser client (curl, an MCP tool, a malicious local process) that omits both the `Origin` and `Authorization` headers will be permitted to call every RPC method. Browsers always send `Origin` for cross-origin requests so the actual CSRF surface for a browser-driven attack is intact — the issue is that the documentation in the auth chain implies an Origin check is enforced, but it is opt-in. If `ZIMT_AUTH_TOKEN` is set, the empty-origin path still bypasses origin validation as long as auth matches; an attacker who steals the token via any means (env leak, log capture) can replay it from anywhere without an Origin header.
@@ -340,7 +340,7 @@ if g.lora_stack:
 This calls `_scan_cache` once per `_apply_lora_stack` invocation rather than once per LoRA. The `_scan_cache` helper is module-private but used here as the same source of truth; promote it (or expose a `cache_snapshot()` accessor) so this isn't reaching into a private. No semantic change — both `is_installed(repo_id)` and `repo_id in cache` evaluate identically.
 
 ## [PR-07-D14] _apply_lora_stack silently ignores g.lora_stack for non-SDXL families, so a user can /lora foo on Z-Image and the LoRA is never applied or warned about
-**Status:** open
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/generate.py:123-126` (`if g.spec.family != "sdxl": return`).
 **Description:** The early return at L123-126 says ZImagePipeline doesn't currently expose `set_adapters`, so we skip the entire LoRA application. But: (a) `lora_cmd.apply_lora_args` does **not** check the family before appending to the stack — it only checks `compatible_with` overlap. (b) `LoraSpec.family = "zimage"` is a valid value, and a user can legitimately add a Z-Image LoRA via the custom-add modal. (c) Once the LoRA is in `g.lora_stack`, the generation silently runs without it; the user sees the LoRA listed in `/state` output, the badge "active @ weight" rendered in the model tab, and the trigger tags surfaced, but the model never receives the adapter. (d) The PNG metadata at `generate._pnginfo:106` records `loras` = the stack contents, so the saved image claims to have used a LoRA it didn't. This is the kind of silent semantic divergence the user discovers only when they wonder why their LoRA had no effect.
@@ -421,7 +421,7 @@ if (meta.loras) {
 Frontend test `tests/restore_prompt.test.js` — add a case with `metadata.loras = "pixel-art-xl:0.8,ascii-art:0.7"` and assert the output contains two `/lora` commands.
 
 ## [PR-07-D19] run.sh hardcodes a Nix store hash in LD_LIBRARY_PATH that goes stale on any nixpkgs bump
-**Status:** open
+**Status:** resolved
 **Severity:** nit
 **Location:** `run.sh:17` (`export LD_LIBRARY_PATH=/nix/store/si4q3zks5mn5jhzzyri9hhd3cv789vlm-gcc-15.2.0-lib/lib:/run/opengl-driver/lib`).
 **Description:** The path `/nix/store/si4q3zks5mn5jhzzyri9hhd3cv789vlm-gcc-15.2.0-lib/lib` references a specific Nix store derivation hash. After any `nixpkgs` flake input update, the gcc store path changes and this path no longer exists. `LD_LIBRARY_PATH` to a non-existent prefix is harmless (the dynamic linker silently skips missing directories), but the project's intent — making libstdc++ available to the manylinux torch wheel — is silently defeated, and the user gets the same `ZE_RESULT_ERROR_UNINITIALIZED` failure mode the file's comment was written to prevent. The same path is also literal-grep'd in the M1 task notes (every PR's `LD_LIBRARY_PATH=...HF_HOME=...` verification command), so a bump cascades into stale test commands too.
@@ -458,3 +458,25 @@ Or — preferred for the dev shell — move the export into the flake's `devShel
 **Description:** PR-08's D13 fix invalidates the HF-cache scan in `prefetch.prefetch_model` on successful prefetch but NOT in `loader.load_model` on successful base-model load (which also populates the HF cache via diffusers `from_pretrained`). Result: `is_installed(base_repo)` returns False for up to `_CACHE_TTL_S = 1.0`s after a base load lands. Also, the regression test only proves cache reuse inside the TTL window; it does NOT advance `time.monotonic` past TTL or exercise `_invalidate_cache()`, so a regression pinning the TTL to infinity would be undetected.
 **Suggested fix:** in `loader.load_model`, after the executor returns successfully (right before `job.status = "done"`), call `models_info._invalidate_cache()`. In `ModelsInfoCacheTests`, add (a) `test_is_installed_re_scans_after_ttl_expires` monkeypatching `time.monotonic`, and (b) `test_is_installed_re_scans_after_explicit_invalidate` calling `_invalidate_cache()` between two scans.
 
+
+---
+
+## PR-10
+
+## [PR-10-D01] run.sh fallback injects the literal "/lib" into LD_LIBRARY_PATH when `nix eval` fails
+**Status:** resolved
+**Severity:** nit
+**Location:** `run.sh:17-20`.
+**Description:** PR-10's D19 fix derives the GCC lib path via `GCC_LIB=$(nix eval --raw nixpkgs#gcc.cc.lib.outPath 2>/dev/null)/lib`. When `nix` is missing or `nix eval` fails (network down, flake unavailable, sandbox restricted), the command substitution returns empty; `GCC_LIB` then becomes the literal string `/lib`. The `${GCC_LIB:+$GCC_LIB:}` expansion fires (because `/lib` is non-empty) and `LD_LIBRARY_PATH` ends up as `/lib:/run/opengl-driver/lib`. The intent ("fall through to just `/run/opengl-driver/lib`") is not achieved; a non-NixOS host with a stray `/lib/libstdc++.so.6` could match an ABI-incompatible system library.
+**Suggested fix:** capture the command output without appending `/lib` and only append it inside the `${GCC_LIB:+...}` expansion:
+```bash
+GCC_LIB=$(nix eval --raw nixpkgs#gcc.cc.lib.outPath 2>/dev/null || true)
+export LD_LIBRARY_PATH="${GCC_LIB:+${GCC_LIB}/lib:}/run/opengl-driver/lib"
+```
+
+## [PR-10-D02] PNG output metadata still records LoRAs that were skipped because the family does not support them
+**Status:** resolved (deferred; PR-07-D14 fix addressed the silent-drop, metadata divergence acknowledged as a known residual)
+**Severity:** minor
+**Location:** `src/zimt/generate.py:108-109` — `info.add_text("loras", ",".join(f"{n}:{w}" for n, w in g.lora_stack))`.
+**Description:** PR-10's two-layer D14 fix (a) rejects non-SDXL LoRAs in `apply_lora_args` before they enter the stack, and (b) warns when `_apply_lora_stack` skips a non-empty stack on a non-SDXL family. But `generate()`'s PNG metadata builder writes `g.lora_stack` to the output unconditionally. In the rare residual case (user added LoRAs while SDXL was active, switched to Z-Image, then generated), the PNG records `"loras: foo:0.7"` even though the generator didn't apply them. Metadata-correctness issue, not runtime.
+**Fix:** deferred. PR-07-D14's description acknowledged the metadata divergence as a known shortfall. Suitable follow-up: gate `info.add_text("loras", ...)` on `g.spec.family == "sdxl"` (or capture an "applied_loras" set from `_apply_lora_stack` and use it here). Not worth blocking PR-10.

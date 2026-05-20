@@ -1148,3 +1148,119 @@ class ModelsInfoCacheTests(unittest.TestCase):
             models_info._invalidate_cache()
             models_info.is_installed("John6666/foo")  # scan #2 after invalidation
         self.assertEqual(call_count["n"], 2)
+
+
+# ---------------------------------------------------------------------------
+# PR-10 regression tests
+# ---------------------------------------------------------------------------
+
+class OutputsCleanupSymlinkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_outputs_cleanup_skips_symlinks_and_preserves_target(self) -> None:
+        # PR-07-D04: outputs_cleanup must not follow symlinks. A symlink in
+        # OUT_DIR whose target lives outside OUT_DIR must survive the cleanup.
+        import tempfile
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            out_dir = os.path.join(tmpdir, "out")
+            os.makedirs(out_dir)
+            # Sentinel file outside OUT_DIR — must not be deleted.
+            sentinel = os.path.join(tmpdir, "sentinel.png")
+            with open(sentinel, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n")  # minimal PNG magic bytes
+            # Symlink inside OUT_DIR pointing at the sentinel.
+            link_path = os.path.join(out_dir, "link.png")
+            os.symlink(sentinel, link_path)
+            # A real PNG file that should be deleted.
+            real_png = os.path.join(out_dir, "real.png")
+            with open(real_png, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n")
+
+            with patch("zimt.webui.app.OUT_DIR", out_dir):
+                result = await web_app._rpc_outputs_cleanup({})
+
+            # Sentinel outside OUT_DIR must still exist — not deleted through symlink.
+            self.assertTrue(os.path.exists(sentinel),
+                            "sentinel target was deleted through the symlink")
+            # Real PNG must have been removed.
+            self.assertFalse(os.path.exists(real_png),
+                             "real PNG should have been deleted by cleanup")
+            # Exactly one file deleted (the real PNG; symlink was skipped).
+            self.assertEqual(result["deleted"], 1)
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+class AuthEmptyOriginTests(unittest.TestCase):
+    def test_origin_required_for_ws_handshake_rejects_empty_origin(self) -> None:
+        # PR-07-D06: an empty Origin with require_origin=True must be rejected
+        # so non-browser clients cannot bypass the CSRF check on the WS endpoint.
+        with patch.dict(os.environ, {}, clear=True):
+            # No Origin header → rejected when require_origin=True.
+            self.assertFalse(web_app._request_permitted(
+                {"host": "127.0.0.1:8000", "origin": "", "authorization": ""},
+                require_origin=True,
+            ))
+            # Same-host Origin → still accepted.
+            self.assertTrue(web_app._request_permitted(
+                {"host": "127.0.0.1:8000", "origin": "http://127.0.0.1:8000",
+                 "authorization": ""},
+                require_origin=True,
+            ))
+        # GET / and static paths use require_origin=False (default); empty
+        # Origin must still be allowed for those.
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(web_app._request_permitted(
+                {"host": "127.0.0.1:8000", "origin": "", "authorization": ""},
+                require_origin=False,
+            ))
+
+
+class NonSdxlLoraTests(unittest.TestCase):
+    def test_apply_lora_args_rejects_lora_for_non_sdxl_base(self) -> None:
+        # PR-07-D14 (layer 1): apply_lora_args must log and skip LoRAs when
+        # the base model's family is not "sdxl", rather than adding them to
+        # the stack where they would be silently ignored at generation time.
+        from zimt.models.spec import LoraSpec
+        from zimt.models.loras import LORAS
+
+        zimage_lora = LoraSpec(
+            name="test-zimage-lora",
+            description="test",
+            repo_id="test/repo",
+            family="zimage",
+            compatible_with=["zimage"],
+        )
+        base = MODELS["z-image-turbo"]  # family="zimage"
+        stack: list[tuple[str, float]] = []
+
+        with patch.dict(LORAS, {"test-zimage-lora": zimage_lora}):
+            log = apply_lora_args(stack, ["test-zimage-lora"], base)
+
+        self.assertEqual(stack, [],
+                         "LoRA must not be added to stack for non-SDXL base")
+        self.assertTrue(
+            any("does not yet support" in line or "family" in line for line in log),
+            f"expected family-unsupported message in log, got {log!r}",
+        )
+
+    def test_apply_lora_stack_warns_when_non_sdxl_has_loras(self) -> None:
+        # PR-07-D14 (layer 2): _apply_lora_stack must emit a warning (not
+        # silently ignore) when g.lora_stack is non-empty for a non-SDXL family.
+        import logging as _logging
+        from zimt.generate import _apply_lora_stack
+
+        pipe = MagicMock()
+        g = _config_for("z-image-turbo")  # family="zimage"
+        g.lora_stack = [("pixel-art-xl", 1.0)]
+
+        with self.assertLogs("zimt.generate", level="WARNING") as cm:
+            _apply_lora_stack(pipe, g)
+
+        # The warning must mention the family and the LoRA name.
+        combined = "\n".join(cm.output)
+        self.assertIn("zimage", combined)
+        self.assertIn("pixel-art-xl", combined)
+        # Pipeline must not have been touched (no load_lora_weights call).
+        pipe.load_lora_weights.assert_not_called()

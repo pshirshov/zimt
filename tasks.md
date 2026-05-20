@@ -34,7 +34,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 - [x] **PR-07** — Whole-codebase review inventory and defect triage.
 - [x] **PR-08** — Backend concurrency and lifecycle follow-up fixes.
 - [x] **PR-09** — Frontend state and API-contract follow-up fixes.
-- [ ] **PR-10** — Filesystem, configuration, and external-boundary follow-up fixes.
+- [x] **PR-10** — Filesystem, configuration, and external-boundary follow-up fixes.
 - [ ] **PR-11** — Final adversarial review and release verification.
 
 ---
@@ -659,3 +659,61 @@ remains planned.
     restore-prompt format must be revisited.
   - Pre-existing pyright `downloads.py:246` finding remains for
     PR-10/D02.
+
+- **PR-10** (2026-05-20) — Filesystem, configuration, and external-
+  boundary fixes for PR-07-D02 (pyright), D04 (symlink cleanup), D06
+  (CSRF), D14 (non-SDXL LoRA), D19 (run.sh Nix hash). Notable changes:
+  `downloads.py:install()` now rebinds the tqdm class via
+  `setattr(hf_tqdm_mod, "tqdm", ProgressTqdm)` — pyright accepts the
+  dynamic form and the project is now pyright-clean for the first
+  time since PR-02 (D02). `outputs_cleanup` short-circuits on
+  `os.path.islink(path)` before `os.path.isfile`, and uses
+  `os.unlink` for explicitness — symlinks in OUT_DIR no longer cause
+  the cleanup to delete their targets (D04). `_request_permitted`
+  gained a `require_origin: bool = False` flag, set True at the WS
+  handshake, so empty-Origin RPC requests are now rejected with code
+  1008 even when no auth token is configured (D06). Two-layer guard
+  for non-SDXL LoRAs: `lora_cmd.apply_lora_args` rejects them at add
+  time with a user-visible log, and `generate._apply_lora_stack`
+  warns via stdlib logging when a non-empty stack reaches a non-SDXL
+  family (D14). `run.sh` derives the GCC lib path via `nix eval`
+  rather than a hardcoded store hash (D19), with a follow-up fix
+  PR-10-D01 that corrected the empty-fallback case so the script
+  degrades cleanly when `nix` is absent.
+  Reproduction before fix:
+  - `OutputsCleanupSymlinkTests` failed against pre-PR-10 cleanup —
+    symlink target was deleted.
+  - `AuthEmptyOriginTests` failed without the `require_origin=True`
+    path — empty Origin on `/ws` was accepted.
+  - `NonSdxlLoraTests` failed without the two-layer guard — LoRAs
+    were silently accepted on Z-Image.
+  Verification:
+  - `.venv/bin/python -m unittest discover -s tests` → 50/50 pass
+    (was 46; +4 new). No pre-existing failures (the last one,
+    `LoaderTests`, was closed in PR-08).
+  - `node --test tests/*.test.js` → 41/41 unchanged.
+  - `nix develop --command pyright src/zimt` → **0 errors, 0
+    warnings** (previously 1 pre-existing tqdm-monkey-patch finding,
+    now closed by D02).
+  - `run.sh` fallback verified: `GCC_LIB=$(false || true)` →
+    `${GCC_LIB:+...}` expands to empty → `LD_LIBRARY_PATH` resolves
+    to just `/run/opengl-driver/lib`.
+  Review:
+  - One adversarial review round flagged PR-10-D01 (the run.sh
+    fallback `/lib` injection) and PR-10-D02 (PNG-metadata
+    divergence). D01 fixed inline; D02 resolved-deferred — the
+    underlying PR-07-D14 description acknowledged the metadata gap
+    as a known shortfall of the suggested fix. Gating
+    `info.add_text("loras", ...)` on `g.spec.family == "sdxl"` is
+    a small follow-up suitable for a future PR.
+  Notes / constraints:
+  - The CSRF tightening is sufficient for today's surface because
+    all RPC goes through WS. A future HTTP RPC handler MUST pass
+    `require_origin=True` to `_request_permitted`.
+  - The non-SDXL LoRA warning in `_apply_lora_stack` surfaces via
+    stdlib logging (stderr) since no logging handler is installed.
+    User-facing feedback comes from the layer-1 reject in
+    `apply_lora_args`, which routes through `emit_log` to the UI.
+  - `run.sh`'s `nix eval` requires `nix` in PATH; the fallback
+    degrades cleanly. Project's documented dev shell always has
+    `nix` so the happy path is the default.

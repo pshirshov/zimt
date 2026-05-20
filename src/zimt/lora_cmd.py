@@ -70,6 +70,12 @@ def apply_lora_args(
         if spec is None:
             log.append(f"lora: unknown {name!r}")
             continue
+        if base.family != "sdxl":
+            log.append(
+                f"lora: {base.family!r} family does not yet support LoRAs; "
+                f"skipping {name!r}"
+            )
+            continue
         if not _is_compatible(spec.compatible_with, base):
             log.append(
                 f"lora: {name!r} (compat={spec.compatible_with}) is not "

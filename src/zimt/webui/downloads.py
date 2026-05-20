@@ -247,7 +247,11 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
                         pass
             _schedule_emit(job)
 
-    hf_tqdm_mod.tqdm = ProgressTqdm
+    # Use setattr to avoid pyright reportAttributeAccessIssue: ModuleType doesn't
+    # declare 'tqdm' in its stubs, so direct attribute assignment is rejected by
+    # the type checker. setattr is the pyright-accepted form (matches the loop
+    # at the end of this function that rebinds already-imported symbols).
+    setattr(hf_tqdm_mod, "tqdm", ProgressTqdm)
 
     # huggingface_hub modules that imported the symbol before this hook
     # ran still hold the old class; rebind by identity.

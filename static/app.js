@@ -250,21 +250,19 @@ function fmtBytes(n) {
 }
 
 function fmtDownloadCounter(j) {
-  const unit = j.download_unit || "";
-  const n = j.download_n || 0;
-  const t = j.download_total || 0;
-  if (unit === "bytes") {
-    return t > 0 ? `${fmtBytes(n)} / ${fmtBytes(t)}` : fmtBytes(n);
-  }
-  if (unit === "files") {
-    return t > 0 ? `${n} / ${t} files` : `${n} files`;
-  }
-  if (unit === "items") {
-    return t > 0 ? `${n} / ${t}` : `${n}`;
-  }
-  // No unit yet — bar hasn't fired or job is fresh. Don't claim byte
-  // semantics; show the bare count if any.
-  if (n > 0 || t > 0) return t > 0 ? `${n} / ${t}` : `${n}`;
+  // Per-unit slots: files and bytes can both be populated during a real
+  // HF snapshot_download (outer thread_map bar + per-file byte bar).
+  const fn = j.download_files_n || 0;
+  const ft = j.download_files_total || 0;
+  const bn = j.download_bytes_n || 0;
+  const bt = j.download_bytes_total || 0;
+  const hasFiles = fn > 0 || ft > 0;
+  const hasBytes = bn > 0 || bt > 0;
+  const filesStr = ft > 0 ? `${fn} / ${ft} files` : (fn > 0 ? `${fn} files` : "");
+  const bytesStr = bt > 0 ? `${fmtBytes(bn)} / ${fmtBytes(bt)}` : (bn > 0 ? fmtBytes(bn) : "");
+  if (hasFiles && hasBytes) return `${filesStr}  ·  ${bytesStr}`;
+  if (hasFiles) return filesStr;
+  if (hasBytes) return bytesStr;
   return "";
 }
 
@@ -281,21 +279,28 @@ function renderQueue() {
     if (j.kind === "download") {
       const label = document.createElement("span"); label.className = "qprompt";
       const file = j.download_file || "(starting)";
-      const counter = fmtDownloadCounter(j);
+      // PR-02-D04: when this job doesn't own the progress slot, surface
+      // a "waiting" affordance instead of progress text and suppress the bar.
+      const waiting = j.progress_owner === false;
+      const counter = waiting ? "waiting for slot…" : fmtDownloadCounter(j);
       label.textContent = counter
         ? `${j.model}  ·  ${file}  ·  ${counter}`
         : `${j.model}  ·  ${file}`;
       label.title = label.textContent;
       li.appendChild(label);
-      if (j.download_files_done > 0) {
+      if (!waiting && j.download_files_done > 0) {
         const meta = document.createElement("span"); meta.className = "qseed";
         meta.textContent = `files done: ${j.download_files_done}`;
         li.appendChild(meta);
       }
-      if (j.status === "running" && j.download_total > 0) {
+      const bytesTotal = j.download_bytes_total || 0;
+      const filesTotal = j.download_files_total || 0;
+      const barTotal = bytesTotal > 0 ? bytesTotal : filesTotal;
+      const barN = bytesTotal > 0 ? (j.download_bytes_n || 0) : (j.download_files_n || 0);
+      if (!waiting && j.status === "running" && barTotal > 0) {
         const bar = document.createElement("div");
         bar.className = "qprogress";
-        const pct = Math.min(100, Math.round(100 * j.download_n / j.download_total));
+        const pct = Math.min(100, Math.round(100 * barN / barTotal));
         bar.title = counter || `${pct}%`;
         const fill = document.createElement("div");
         fill.style.width = pct + "%";
@@ -1179,11 +1184,28 @@ function renderBases() {
 
 function _modelDlBtnState({ dlJob, installed }) {
   if (dlJob) {
-    const pct = dlJob.download_total > 0
-      ? Math.round(100 * dlJob.download_n / dlJob.download_total) : null;
-    // Include a unit suffix when the unit is known so the user can tell
-    // which scale the percentage refers to (PR-07-D16: byte-% vs file-%).
-    const unit = dlJob.download_unit || "";
+    // PR-02-D04: a job that didn't acquire the progress slot has no
+    // tqdm events to report — show a waiting affordance instead.
+    if (dlJob.progress_owner === false) {
+      return {
+        text: "downloading (waiting)…",
+        disabled: true,
+        title: "another download owns the progress slot",
+      };
+    }
+    // PR-04 follow-up: per-unit slots. Prefer bytes percent (more granular)
+    // and fall back to files when only files are populated.
+    const bytesTotal = dlJob.download_bytes_total || 0;
+    const filesTotal = dlJob.download_files_total || 0;
+    let pct = null;
+    let unit = "";
+    if (bytesTotal > 0) {
+      pct = Math.round(100 * (dlJob.download_bytes_n || 0) / bytesTotal);
+      unit = "bytes";
+    } else if (filesTotal > 0) {
+      pct = Math.round(100 * (dlJob.download_files_n || 0) / filesTotal);
+      unit = "files";
+    }
     let text;
     if (pct == null) {
       text = "downloading…";

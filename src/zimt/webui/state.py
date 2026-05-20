@@ -72,17 +72,23 @@ class Job:
     # Generation progress: ``step`` is 1-based; 0 means not started yet.
     step: int = 0
     total_steps: int = 0
-    # Download progress: file currently being fetched + its byte counts.
-    # File-aggregate counts are best-effort — HF's tqdm doesn't expose how
-    # many files remain in a snapshot pull, so we count what we've seen
-    # close().
+    # Download progress: file currently being fetched + per-unit counts.
+    # Each unit (bytes, files) has its own n/total pair so the byte-bar
+    # and outer file-count bar (which fire alternately during a real HF
+    # snapshot_download) don't oscillate through a single slot. The UI
+    # renders both when both are populated. download_file is the most
+    # recent active file/desc, regardless of unit.
     download_file: str = ""
-    download_n: int = 0
-    download_total: int = 0
-    # Unit for download_n/download_total reported by HF's tqdm:
-    # "bytes" | "files" | "items" | "" (no bar event yet).
-    download_unit: str = ""
-    download_files_done: int = 0
+    download_files_n: int = 0
+    download_files_total: int = 0
+    download_files_done: int = 0  # mirrors download_files_n (PR-04 legacy)
+    download_bytes_n: int = 0
+    download_bytes_total: int = 0
+    # True iff this download job currently owns the progress slot
+    # (set_active_download returned True). When False, the Job is
+    # proceeding without broadcasting tqdm progress; the UI shows a
+    # distinct "waiting" affordance instead of the byte/file counter.
+    progress_owner: bool = True
 
 
 @dataclass

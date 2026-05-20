@@ -105,7 +105,10 @@ def _pnginfo(g: GenConfig, full_prompt: str, raw_prompt: str, seed: int) -> PngI
     info.add_text("height", str(g.height))
     info.add_text("dtype", "bfloat16")
     info.add_text("device", DEVICE)
-    if g.lora_stack:
+    # Only SDXL actually applies the stack (see _apply_lora_stack); for
+    # non-SDXL families the LoRAs are skipped, so the PNG must not claim
+    # they were used. (PR-10-D02)
+    if g.spec.family == "sdxl" and g.lora_stack:
         info.add_text("loras", ",".join(f"{n}:{w}" for n, w in g.lora_stack))
     return info
 

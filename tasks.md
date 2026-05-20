@@ -11,6 +11,7 @@ Status: `[ ]` planned · `[~]` in progress · `[x]` done · `[!]` blocked
 - [x] **M1** — Resolve known model-tab/download correctness defects with regression tests.
 - [x] **M2** — Perform whole-codebase adversarial review and execute follow-up fixes for confirmed defects.
 - [x] **M3** — Apply Firefox WebSocket quirks per the `/resilient-ws-ui` skill.
+- [x] **M4** — Close the three documented deferrals from M1/M2 (Job-model refactor + PNG metadata gate).
 
 ---
 
@@ -44,6 +45,14 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 Scope: front-end WebSocket transport must remain reliable on Firefox per the `/resilient-ws-ui` skill (Firefox treats unclean closes differently than Chromium-based browsers; heartbeats, reconnect backoff, and connection-state surfacing all need explicit handling). Detail plan to be written when work begins.
 
 - [x] **PR-12** — Apply Firefox WebSocket quirks (heartbeat / reconnect backoff / connection-state UX) per the `/resilient-ws-ui` skill. Added 2026-05-20 at user request.
+
+---
+
+## Milestone 4 — PR breakdown
+
+Picks up the three documented deferrals carried through M1/M2: PR-02-D04 (row-level "busy" indicator for slot-loser load), PR-04 follow-up (file/byte flicker — split single `download_n/total` slot per unit), PR-10-D02 (PNG metadata records skipped LoRAs). All three share the `Job` dataclass touch; bundled into one PR.
+
+- [x] **PR-13** — Job-model deferrals: progress_owner flag + per-unit download slots + applied-LoRAs metadata gate.
 
 ---
 
@@ -765,3 +774,65 @@ rounds because tests patched the executor payload); (2) HF
 `unit='it'` — never the literal `'file'` — and is identified by its
 desc; (3) `loop.run_in_executor` does NOT propagate contextvars in
 CPython 3.13, so callers must wrap with `copy_context()` + `ctx.run`.
+
+- **PR-13** (2026-05-20) — Closes the three M1/M2 deferrals in one
+  `Job`-model refactor + a one-line PNG-metadata gate.
+  (1) PR-02-D04: new `Job.progress_owner: bool = True` field set
+  from `set_active_download`'s return value in `loader.py` and
+  `prefetch.py`; the frontend's queue download-row renders a
+  `"waiting for slot…"` label (no progress bar) when
+  `progress_owner === false`, and `_modelDlBtnState` returns
+  `"downloading (waiting)…"` in the model-tab button. The user can
+  now see at a glance which download row is the silent passenger
+  rather than the progress-owning broadcaster.
+  (2) PR-04 follow-up: clean break of the single `download_n /
+  download_total / download_unit` slot into per-unit slots —
+  `download_files_n / _total / _done` and `download_bytes_n / _total`.
+  `ProgressTqdm._emit` routes per the `_classify(unit, desc)` result:
+  byte events to the bytes slot, file-count events to the files slot
+  (plus the `download_files_done` mirror), unknown/`items` events
+  to neither (per PR-04's "do not claim semantics" rule).
+  `fmtDownloadCounter` renders both slots concurrently when both are
+  populated (`"3 / 7 files  ·  512KB / 4MB"`); the progress bar and
+  `_modelDlBtnState` prefer the bytes percent when bytes are
+  populated (more granular ETA) and fall back to files otherwise.
+  (3) PR-10-D02: `info.add_text("loras", ...)` in `generate._meta`
+  is now gated on `g.spec.family == "sdxl" and g.lora_stack` — the
+  PNG metadata no longer lies about applied LoRAs for non-SDXL
+  families.
+  Verification:
+  - `.venv/bin/python -m unittest discover -s tests` → 53/53 pass
+    (was 50; +3 net).
+  - `node --test tests/*.test.js` → 42/42 pass (was 41; net +1 with
+    3 originals migrated to the new field names and 4 new tests
+    added).
+  - `nix develop --command pyright src/zimt` → 0/0/0 (still clean).
+  - `command grep -rn 'download_n\b\|download_total\b\|download_unit\b' src/ static/ tests/`
+    → empty. The break is total; no aliases.
+  Review:
+  - One brief adversarial review confirmed the refactor is complete
+    (no surviving references), the frontend handles all four state
+    combinations (progress_owner=false, both/files/bytes/neither),
+    the PNG gate is the sole writer, and tests cover each deferral.
+    One informational note (`download_files_done` is now redundant
+    with `download_files_n` since both are written to the same `n`
+    in the files branch) — consolidation is a future cleanup if
+    desired; the frontend still reads `download_files_done` for the
+    `files done: N` queue annotation.
+  Notes / constraints:
+  - The Job-model refactor is a clean break; no field aliases exist.
+    Any consumer of the broadcast `type: "job"` event that previously
+    read `download_n`/`download_total`/`download_unit` must migrate
+    to the new per-unit field names.
+  - The `progress_owner` flag defaults to `True` on dataclass
+    construction. Old/stale JS snapshots without the field default
+    to non-waiting (graceful) due to the strict `=== false` check.
+
+---
+
+**Milestone 4 complete (2026-05-20).** All three documented
+deferrals carried from M1/M2 are now closed by code. The defect
+ledger has zero entries in `open`, `under fix`, or
+`resolved (deferred …)` status; all 41 entries are now plain
+`resolved`. Test counts: 53 Python pass + 42 JS pass + pyright
+0/0/0. The review-loop is genuinely drained.

@@ -32,7 +32,7 @@ Status: `[ ]` open · `[~]` under fix · `[x]` resolved
 **Fix:** `src/zimt/webui/downloads.py:157` — the `close()` body now guards the `download_files_done += 1` increment behind `if jid is None or jid != self._zimt_owner: return`, identical to the `_emit` gate. Same root-cause fix as D01; `_zimt_owner` is captured on the bar at construction time and only the owning job's `close()` events update its counter.
 
 ## [PR-02-D04] a load that fails to acquire the slot signals "busy" only via a single log line; the Job stays in status "running" with no UI affordance distinguishing it
-**Status:** resolved (mitigated; row-level "busy" state deferred to PR-06)
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/webui/loader.py:82-84`.
 **Description:** The PR-02 acceptance criterion says a non-acquiring load should "wait, queue, or report a defined busy state." The diff chose "proceed and log one line." The Job is created at `loader.py:71-78` with `status="running"`; the user sees two "running" download rows, one of which silently has no progress (post-D01-fix). The log line is informational, not state. A user without the log view cannot tell which row is the "real" progress owner.
@@ -475,7 +475,7 @@ export LD_LIBRARY_PATH="${GCC_LIB:+${GCC_LIB}/lib:}/run/opengl-driver/lib"
 ```
 
 ## [PR-10-D02] PNG output metadata still records LoRAs that were skipped because the family does not support them
-**Status:** resolved (deferred; PR-07-D14 fix addressed the silent-drop, metadata divergence acknowledged as a known residual)
+**Status:** resolved
 **Severity:** minor
 **Location:** `src/zimt/generate.py:108-109` — `info.add_text("loras", ",".join(f"{n}:{w}" for n, w in g.lora_stack))`.
 **Description:** PR-10's two-layer D14 fix (a) rejects non-SDXL LoRAs in `apply_lora_args` before they enter the stack, and (b) warns when `_apply_lora_stack` skips a non-empty stack on a non-SDXL family. But `generate()`'s PNG metadata builder writes `g.lora_stack` to the output unconditionally. In the rare residual case (user added LoRAs while SDXL was active, switched to Z-Image, then generated), the PNG records `"loras: foo:0.7"` even though the generator didn't apply them. Metadata-correctness issue, not runtime.

@@ -110,8 +110,10 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
             await emit_job(job)
             try:
                 owns_progress = set_active_download(job.id)
+                job.progress_owner = owns_progress
                 if not owns_progress:
                     await emit_log(f"download progress slot busy; prefetch of {name} progress will not be broadcast")
+                    await emit_job(job)
                 loop = asyncio.get_running_loop()
                 with download_context(job.id):
                     ctx = contextvars.copy_context()

@@ -223,7 +223,7 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
             # Hold _active_lock across both the ownership check and the
             # field writes so a concurrent emit_job(asdict(job)) (which
             # also acquires _active_lock for download jobs) cannot read
-            # a torn snapshot (e.g. unit='files' with bytes-bar n/total).
+            # a torn snapshot.
             with _active_lock:
                 jid = _active_job_id
                 if jid is None or jid != getattr(self, "_zimt_owner", None):
@@ -234,17 +234,20 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
                 desc = (getattr(self, "desc", "") or "").strip()
                 job.download_file = desc or job.download_file
                 cat = _classify(getattr(self, "unit", "") or "", desc)
-                job.download_unit = cat
                 try:
-                    job.download_n = int(self.n or 0)
-                    job.download_total = int(self.total or 0)
+                    n = int(self.n or 0)
+                    total = int(self.total or 0)
                 except (TypeError, ValueError):
-                    pass
+                    n, total = 0, 0
                 if cat == "files":
-                    try:
-                        job.download_files_done = int(self.n or 0)
-                    except (TypeError, ValueError):
-                        pass
+                    job.download_files_n = n
+                    job.download_files_total = total
+                    job.download_files_done = n
+                elif cat == "bytes":
+                    job.download_bytes_n = n
+                    job.download_bytes_total = total
+                # cat == "items" or unknown: don't write to either pair —
+                # per PR-04, unknown events do not claim semantics.
             _schedule_emit(job)
 
     # Use setattr to avoid pyright reportAttributeAccessIssue: ModuleType doesn't

@@ -192,8 +192,8 @@ test("download queue row renders a cancel button when running and omits it when 
     status: "running",
     model: "some-model",
     download_file: "weights.bin",
-    download_n: 10,
-    download_total: 100,
+    download_bytes_n: 10,
+    download_bytes_total: 100,
     download_files_done: 0,
   });
   const queueList = app.document.getElementById("queue-list");
@@ -208,8 +208,8 @@ test("download queue row renders a cancel button when running and omits it when 
     status: "done",
     model: "some-model-2",
     download_file: "weights.bin",
-    download_n: 100,
-    download_total: 100,
+    download_bytes_n: 100,
+    download_bytes_total: 100,
     download_files_done: 1,
   });
   const doneRow = queueList.children[0]; // reverse order: newest first
@@ -227,8 +227,8 @@ test("model-tab active download lookup separates base and LoRA targets with the 
     status: "running",
     model: "shared-name",
     download_file: "model.safetensors",
-    download_n: 25,
-    download_total: 100,
+    download_bytes_n: 25,
+    download_bytes_total: 100,
     download_files_done: 0,
   });
   const queueList = app.document.getElementById("queue-list");
@@ -241,54 +241,44 @@ test("model-tab active download lookup separates base and LoRA targets with the 
   assert.equal(loraDownloads.has("shared-name"), false);
 });
 
-test("download counter formats byte unit as bytes", () => {
+test("download counter formats bytes slot as bytes", () => {
   const app = loadApp();
   const out = app.fmtDownloadCounter({
-    download_unit: "bytes",
-    download_n: 1024,
-    download_total: 4096,
+    download_bytes_n: 1024,
+    download_bytes_total: 4096,
   });
   assert.equal(out, "1.0 KB / 4.0 KB");
 });
 
-test("download counter formats file unit with files label", () => {
+test("download counter formats files slot with files label", () => {
   const app = loadApp();
   const out = app.fmtDownloadCounter({
-    download_unit: "files",
-    download_n: 3,
-    download_total: 7,
+    download_files_n: 3,
+    download_files_total: 7,
   });
   assert.equal(out, "3 / 7 files");
 });
 
-test("download counter formats items unit as plain numbers", () => {
+test("download counter renders both files and bytes when both slots populated", () => {
   const app = loadApp();
   const out = app.fmtDownloadCounter({
-    download_unit: "items",
-    download_n: 2,
-    download_total: 5,
+    download_files_n: 3,
+    download_files_total: 7,
+    download_bytes_n: 512,
+    download_bytes_total: 4096,
   });
-  assert.equal(out, "2 / 5");
+  assert.equal(out, "3 / 7 files  ·  512 B / 4.0 KB");
 });
 
-test("download counter without unit and zero counters returns empty", () => {
+test("download counter with all-zero counters returns empty", () => {
   const app = loadApp();
   const out = app.fmtDownloadCounter({
-    download_unit: "",
-    download_n: 0,
-    download_total: 0,
+    download_files_n: 0,
+    download_files_total: 0,
+    download_bytes_n: 0,
+    download_bytes_total: 0,
   });
   assert.equal(out, "");
-});
-
-test("download counter without unit but with counters returns plain numbers, NOT bytes", () => {
-  const app = loadApp();
-  const out = app.fmtDownloadCounter({
-    download_unit: "",
-    download_n: 5,
-    download_total: 10,
-  });
-  assert.equal(out, "5 / 10");
 });
 
 test("lora add button disabled when not installed", () => {
@@ -342,20 +332,20 @@ test("download button shows 'redownload' for installed model with no active job"
   assert.ok(typeof r.title === "string" && r.title.length > 0);
 });
 
-test("download button shows 'downloading X%' and is disabled when an active job has progress", () => {
+test("download button shows 'downloading X%' and is disabled when bytes slot has progress", () => {
   const app = loadApp();
   const r = app._modelDlBtnState({
-    dlJob: { download_n: 50, download_total: 100 },
+    dlJob: { download_bytes_n: 50, download_bytes_total: 100 },
     installed: false,
   });
-  assert.equal(r.text, "downloading 50%");
+  assert.equal(r.text, "downloading 50% bytes");
   assert.equal(r.disabled, true);
 });
 
 test("download button shows 'downloading…' and is disabled when an active job has no total", () => {
   const app = loadApp();
   const r = app._modelDlBtnState({
-    dlJob: { download_n: 0, download_total: 0 },
+    dlJob: {},
     installed: false,
   });
   assert.equal(r.text, "downloading…");
@@ -365,10 +355,10 @@ test("download button shows 'downloading…' and is disabled when an active job 
 test("download button stays disabled while active even for already-installed model", () => {
   const app = loadApp();
   const r = app._modelDlBtnState({
-    dlJob: { download_n: 30, download_total: 60 },
+    dlJob: { download_bytes_n: 30, download_bytes_total: 60 },
     installed: true,
   });
-  assert.equal(r.text, "downloading 50%");
+  assert.equal(r.text, "downloading 50% bytes");
   assert.equal(r.disabled, true);
 });
 

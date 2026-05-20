@@ -91,8 +91,10 @@ async def load_model(name: str) -> None:
     await emit_state()
     try:
         owns_progress = set_active_download(job.id)
+        job.progress_owner = owns_progress
         if not owns_progress:
             await emit_log(f"download progress slot busy; {name} load progress will not be broadcast")
+            await emit_job(job)
         logged_wait = False
         while _has_active_generation_jobs():
             if CANCEL_EVENTS[job.id].is_set():

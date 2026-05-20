@@ -276,6 +276,58 @@ class DownloadOwnershipTests(StateCase):
                     raise RuntimeError("prefetch task did not finish after release")
 
 
+    async def test_load_started_while_prefetch_holds_slot_records_progress_owner_false(self) -> None:
+        # PR-02-D04: a load that fails to acquire the slot must surface
+        # the busy state on the Job itself (progress_owner=False) so the
+        # UI can show a "waiting" affordance.
+        loop = asyncio.get_running_loop()
+        prefetch_started = asyncio.Event()
+        release_prefetch = threading.Event()
+
+        def blocked_snapshot(_repo_id: str) -> None:
+            loop.call_soon_threadsafe(prefetch_started.set)
+            if not release_prefetch.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release blocked prefetch")
+
+        observed: dict[str, bool | None] = {}
+
+        def succeed(name: str) -> None:
+            # Captured at the moment the executor payload runs — the
+            # load Job has already been marked progress_owner=False
+            # because set_active_download returned False above.
+            load_jobs = [
+                j for j in STATE.jobs.values()
+                if j.kind == "download" and j.model == name
+            ]
+            observed["load_progress_owner"] = (
+                load_jobs[0].progress_owner if load_jobs else None
+            )
+            STATE.pipe = object()
+            STATE.g = _config_for(name)
+
+        with (
+            patch.object(prefetch, "_snapshot_download_sync", blocked_snapshot),
+            patch.object(loader, "_do_load_sync", succeed),
+        ):
+            prefetch_job_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            try:
+                await asyncio.wait_for(prefetch_started.wait(), timeout=1)
+                # Prefetch owns the slot.
+                self.assertTrue(STATE.jobs[prefetch_job_id].progress_owner)
+                await loader.load_model("z-image-turbo")
+                # The load couldn't acquire the slot and recorded that.
+                self.assertEqual(observed["load_progress_owner"], False)
+            finally:
+                release_prefetch.set()
+                for _ in range(50):
+                    job = STATE.jobs.get(prefetch_job_id)
+                    if job is not None and job.status in {"done", "error"}:
+                        break
+                    await asyncio.sleep(0.02)
+                else:
+                    raise RuntimeError("prefetch task did not finish after release")
+
+
 class DownloadCancelTests(StateCase):
     async def test_queued_prefetch_canceled_before_run(self) -> None:
         # Two prefetch jobs (distinct assets, since duplicate (kind, name)
@@ -654,16 +706,18 @@ class ProgressUnitTests(StateCase):
         downloads.set_active_download(jid)
         return job
 
-    def test_byte_tqdm_event_sets_unit_bytes_and_does_not_change_files_done_on_close(self) -> None:
+    def test_byte_tqdm_event_writes_only_bytes_slot_and_leaves_files_done_zero(self) -> None:
         ProgressTqdm = self._progress_tqdm()
         job = self._setup_job("byte-job")
         try:
             with downloads.download_context(job.id):
                 bar = ProgressTqdm(total=12345, desc="model.safetensors", unit="B")
                 bar.update(100)
-                self.assertEqual(STATE.jobs[job.id].download_unit, "bytes")
-                self.assertEqual(STATE.jobs[job.id].download_n, 100)
-                self.assertEqual(STATE.jobs[job.id].download_total, 12345)
+                self.assertEqual(STATE.jobs[job.id].download_bytes_n, 100)
+                self.assertEqual(STATE.jobs[job.id].download_bytes_total, 12345)
+                # File slots untouched by a bytes event.
+                self.assertEqual(STATE.jobs[job.id].download_files_n, 0)
+                self.assertEqual(STATE.jobs[job.id].download_files_total, 0)
                 self.assertEqual(STATE.jobs[job.id].download_files_done, 0)
                 bar.close()
                 # close() no longer mutates download_files_done; it stays 0.
@@ -671,7 +725,7 @@ class ProgressUnitTests(StateCase):
         finally:
             downloads.clear_active_download(job.id)
 
-    def test_file_count_tqdm_event_classified_via_desc_and_drives_files_done(self) -> None:
+    def test_file_count_tqdm_event_classified_via_desc_and_drives_files_slot(self) -> None:
         # HF emits unit='it' (tqdm default) for the outer "Fetching N files"
         # thread_map bar.  Classification must use desc, not unit.
         ProgressTqdm = self._progress_tqdm()
@@ -680,36 +734,40 @@ class ProgressUnitTests(StateCase):
             with downloads.download_context(job.id):
                 bar = ProgressTqdm(total=7, desc="Fetching 7 files", unit="it")
                 bar.update(3)
-                self.assertEqual(STATE.jobs[job.id].download_unit, "files")
-                self.assertEqual(STATE.jobs[job.id].download_n, 3)
-                self.assertEqual(STATE.jobs[job.id].download_total, 7)
+                self.assertEqual(STATE.jobs[job.id].download_files_n, 3)
+                self.assertEqual(STATE.jobs[job.id].download_files_total, 7)
                 self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
+                # Bytes slot untouched by a files event.
+                self.assertEqual(STATE.jobs[job.id].download_bytes_n, 0)
+                self.assertEqual(STATE.jobs[job.id].download_bytes_total, 0)
                 bar.close()
                 # close() does not mutate download_files_done.
                 self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
         finally:
             downloads.clear_active_download(job.id)
 
-    def test_combined_files_bar_and_bytes_bar_drive_job_state_correctly(self) -> None:
+    def test_combined_files_bar_and_bytes_bar_populate_independent_slots(self) -> None:
         # Models the real HF snapshot_download interleaving: outer
         # "Fetching N files" bar (unit='it', desc matches regex) plus
-        # an aggregate bytes bar (unit='B').
+        # an aggregate bytes bar (unit='B'). With per-unit slots both
+        # progress views remain available simultaneously.
         ProgressTqdm = self._progress_tqdm()
         job = self._setup_job("combined-job")
         try:
             with downloads.download_context(job.id):
                 outer = ProgressTqdm(total=7, desc="Fetching 7 files", unit="it")
                 outer.update(3)
-                self.assertEqual(STATE.jobs[job.id].download_unit, "files")
-                self.assertEqual(STATE.jobs[job.id].download_n, 3)
-                self.assertEqual(STATE.jobs[job.id].download_total, 7)
+                self.assertEqual(STATE.jobs[job.id].download_files_n, 3)
+                self.assertEqual(STATE.jobs[job.id].download_files_total, 7)
                 self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
 
                 inner = ProgressTqdm(total=100_000, desc="model.safetensors", unit="B")
                 inner.update(1024)
-                self.assertEqual(STATE.jobs[job.id].download_unit, "bytes")
-                self.assertEqual(STATE.jobs[job.id].download_n, 1024)
-                # bytes bar must NOT change download_files_done — still 3 from outer.
+                # Bytes slot now populated; files slot preserved.
+                self.assertEqual(STATE.jobs[job.id].download_bytes_n, 1024)
+                self.assertEqual(STATE.jobs[job.id].download_bytes_total, 100_000)
+                self.assertEqual(STATE.jobs[job.id].download_files_n, 3)
+                self.assertEqual(STATE.jobs[job.id].download_files_total, 7)
                 self.assertEqual(STATE.jobs[job.id].download_files_done, 3)
 
                 inner.close()
@@ -723,14 +781,19 @@ class ProgressUnitTests(StateCase):
         finally:
             downloads.clear_active_download(job.id)
 
-    def test_unknown_unit_tqdm_event_normalizes_to_items_and_does_not_bump_files_done(self) -> None:
+    def test_unknown_unit_tqdm_event_writes_neither_slot(self) -> None:
         ProgressTqdm = self._progress_tqdm()
         job = self._setup_job("item-job")
         try:
             with downloads.download_context(job.id):
                 bar = ProgressTqdm(total=5, desc="something", unit="it")
                 bar.update(2)
-                self.assertEqual(STATE.jobs[job.id].download_unit, "items")
+                # Unknown 'items' events claim no semantics — neither slot
+                # is written (PR-04: per-unit slots, unknown means no-op).
+                self.assertEqual(STATE.jobs[job.id].download_files_n, 0)
+                self.assertEqual(STATE.jobs[job.id].download_files_total, 0)
+                self.assertEqual(STATE.jobs[job.id].download_bytes_n, 0)
+                self.assertEqual(STATE.jobs[job.id].download_bytes_total, 0)
                 bar.close()
                 self.assertEqual(STATE.jobs[job.id].download_files_done, 0)
         finally:
@@ -1244,6 +1307,44 @@ class NonSdxlLoraTests(unittest.TestCase):
             any("does not yet support" in line or "family" in line for line in log),
             f"expected family-unsupported message in log, got {log!r}",
         )
+
+    def test_pnginfo_omits_loras_text_for_non_sdxl_family_with_nonempty_stack(self) -> None:
+        # PR-10-D02: _pnginfo previously wrote "loras" unconditionally
+        # even when _apply_lora_stack skipped the stack on a non-SDXL
+        # family. The PNG metadata must not claim LoRAs were applied
+        # when they weren't.
+        from zimt.generate import _pnginfo
+
+        g = _config_for("z-image-turbo")  # family="zimage"
+        g.lora_stack = [("pixel-art-xl", 0.8)]
+        info = _pnginfo(g, "prompt", "prompt", 42)
+        # PngInfo exposes the text chunks via .chunks (a list of tuples).
+        # Extract the keyword of every tEXt/iTXt/zTXt chunk.
+        keywords: set[str] = set()
+        for chunk_type, data, *_ in info.chunks:
+            if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
+                # tEXt: keyword\x00text; iTXt: keyword\x00...
+                keyword = data.split(b"\x00", 1)[0].decode("latin-1", "replace")
+                keywords.add(keyword)
+        self.assertNotIn(
+            "loras", keywords,
+            "non-SDXL family must not record 'loras' in PNG metadata",
+        )
+
+    def test_pnginfo_records_loras_text_for_sdxl_family_with_nonempty_stack(self) -> None:
+        # Sibling positive case: SDXL bases DO apply the stack, so the
+        # PNG metadata must record it.
+        from zimt.generate import _pnginfo
+
+        g = _config_for("pony-v6-xl")  # family="sdxl"
+        g.lora_stack = [("pixel-art-xl", 0.8)]
+        info = _pnginfo(g, "prompt", "prompt", 42)
+        keywords: set[str] = set()
+        for chunk_type, data, *_ in info.chunks:
+            if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
+                keyword = data.split(b"\x00", 1)[0].decode("latin-1", "replace")
+                keywords.add(keyword)
+        self.assertIn("loras", keywords)
 
     def test_apply_lora_stack_warns_when_non_sdxl_has_loras(self) -> None:
         # PR-07-D14 (layer 2): _apply_lora_stack must emit a warning (not

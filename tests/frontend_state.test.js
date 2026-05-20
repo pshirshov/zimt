@@ -153,7 +153,7 @@ test("D15: onJob evicts a completed entry, not a running one, when queue is full
     target_kind: "base",
     status: "running",
     model: "big-model",
-    download_n: 0, download_total: 0, download_files_done: 0,
+    download_bytes_n: 0, download_bytes_total: 0, download_files_done: 0,
   });
   for (let i = 1; i < 30; i++) {
     app.onJob({
@@ -162,7 +162,7 @@ test("D15: onJob evicts a completed entry, not a running one, when queue is full
       target_kind: "base",
       status: "done",
       model: `model-${i}`,
-      download_n: 100, download_total: 100, download_files_done: 1,
+      download_bytes_n: 100, download_bytes_total: 100, download_files_done: 1,
     });
   }
   // Queue is now exactly 30 (MAX_QUEUE_SHOWN). Adding one more triggers eviction.
@@ -172,7 +172,7 @@ test("D15: onJob evicts a completed entry, not a running one, when queue is full
     target_kind: "base",
     status: "done",
     model: "trigger-model",
-    download_n: 100, download_total: 100, download_files_done: 1,
+    download_bytes_n: 100, download_bytes_total: 100, download_files_done: 1,
   });
 
   const queueList = app.document.getElementById("queue-list");
@@ -194,7 +194,7 @@ test("D15: onJob evicts the oldest active entry only when all entries are active
       target_kind: "base",
       status: "running",
       model: `model-${i}`,
-      download_n: 0, download_total: 0, download_files_done: 0,
+      download_bytes_n: 0, download_bytes_total: 0, download_files_done: 0,
     });
   }
   // Trigger eviction — all entries are running so oldest active must be evicted.
@@ -204,7 +204,7 @@ test("D15: onJob evicts the oldest active entry only when all entries are active
     target_kind: "base",
     status: "running",
     model: "new-model",
-    download_n: 0, download_total: 0, download_files_done: 0,
+    download_bytes_n: 0, download_bytes_total: 0, download_files_done: 0,
   });
 
   const queueList = app.document.getElementById("queue-list");
@@ -219,10 +219,10 @@ test("D15: onJob evicts the oldest active entry only when all entries are active
 
 // ---------- D16: _modelDlBtnState uses unit-aware percentage ----------
 
-test("D16: _modelDlBtnState shows bytes percentage with unit suffix when download_unit is bytes", () => {
+test("D16: _modelDlBtnState shows bytes percentage with unit suffix when bytes slot is populated", () => {
   const app = loadApp();
   const r = app._modelDlBtnState({
-    dlJob: { download_unit: "bytes", download_n: 512, download_total: 1024 },
+    dlJob: { download_bytes_n: 512, download_bytes_total: 1024 },
     installed: false,
   });
   // Percent should be 50; text should indicate bytes unit.
@@ -233,10 +233,10 @@ test("D16: _modelDlBtnState shows bytes percentage with unit suffix when downloa
   assert.equal(r.disabled, true);
 });
 
-test("D16: _modelDlBtnState shows files percentage with unit suffix when download_unit is files", () => {
+test("D16: _modelDlBtnState shows files percentage with unit suffix when only files slot is populated", () => {
   const app = loadApp();
   const r = app._modelDlBtnState({
-    dlJob: { download_unit: "files", download_n: 3, download_total: 7 },
+    dlJob: { download_files_n: 3, download_files_total: 7 },
     installed: false,
   });
   // Math.round(100 * 3 / 7) = 43
@@ -247,22 +247,66 @@ test("D16: _modelDlBtnState shows files percentage with unit suffix when downloa
   assert.equal(r.disabled, true);
 });
 
-test("D16: _modelDlBtnState produces a meaningful number for a transitional snapshot (unit='files', stale byte counters)", () => {
+test("PR-04: _modelDlBtnState prefers bytes percent when both slots are populated", () => {
   const app = loadApp();
-  // Transitional state: unit switched to 'files' but n/total still hold byte values.
-  // The function must not crash and must produce some text with a number or '…'.
+  // Real HF snapshot_download interleaves both bars; the button must pick
+  // ONE percentage rather than oscillate. Bytes is more granular.
   const r = app._modelDlBtnState({
-    dlJob: { download_unit: "files", download_n: 512, download_total: 1024 },
+    dlJob: {
+      download_files_n: 3, download_files_total: 7,       // 43% files
+      download_bytes_n: 512, download_bytes_total: 1024,  // 50% bytes
+    },
     installed: false,
   });
+  assert.match(r.text, /50/,
+    `expected bytes percent (50) in button text, got: ${r.text}`);
+  assert.match(r.text, /bytes/,
+    `expected 'bytes' unit label in button text, got: ${r.text}`);
   assert.equal(r.disabled, true);
-  // Should produce "downloading 50% files" — 50% is math.round(512/1024*100).
-  // The key assertion: no exception and the result is not "downloading…" (i.e. a
-  // percentage is produced since total > 0).
-  assert.ok(r.text.startsWith("downloading "),
-    `expected text to start with 'downloading ', got: ${r.text}`);
-  assert.ok(r.text !== "downloading…",
-    "expected a percentage to be computed when download_total > 0");
+});
+
+test("PR-02-D04: _modelDlBtnState shows waiting affordance when progress_owner=false", () => {
+  const app = loadApp();
+  const r = app._modelDlBtnState({
+    dlJob: {
+      progress_owner: false,
+      download_bytes_n: 0, download_bytes_total: 0,
+    },
+    installed: false,
+  });
+  assert.match(r.text, /waiting/,
+    `expected 'waiting' in button text, got: ${r.text}`);
+  assert.equal(r.disabled, true);
+});
+
+test("PR-02-D04: queue row for a non-owning download shows 'waiting' label and no progress bar", () => {
+  const app = loadApp();
+  app.onJob({
+    id: "dl-waiting",
+    kind: "download",
+    target_kind: "base",
+    status: "running",
+    model: "model-x",
+    download_file: "weights.bin",
+    progress_owner: false,
+    download_bytes_n: 0, download_bytes_total: 0,
+    download_files_n: 0, download_files_total: 0,
+    download_files_done: 0,
+  });
+  const queueList = app.document.getElementById("queue-list");
+  const row = queueList.children[0];
+  // Find the qprompt span.
+  let prompt = null;
+  let bar = null;
+  for (const child of row.children) {
+    const cn = typeof child.className === "string" ? child.className : "";
+    if (cn.includes("qprompt")) prompt = child;
+    if (cn.includes("qprogress")) bar = child;
+  }
+  assert.ok(prompt, "expected a .qprompt span on the row");
+  assert.match(prompt.textContent, /waiting/,
+    `expected 'waiting' in row label, got: ${prompt.textContent}`);
+  assert.equal(bar, null, "expected no .qprogress bar when progress_owner=false");
 });
 
 // ---------- D17: dlBtn restores text after click resolves ----------

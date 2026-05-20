@@ -9,7 +9,7 @@ Status: `[ ]` planned · `[~]` in progress · `[x]` done · `[!]` blocked
 ## Milestones (high-level)
 
 - [x] **M1** — Resolve known model-tab/download correctness defects with regression tests.
-- [~] **M2** — Perform whole-codebase adversarial review and execute follow-up fixes for confirmed defects.
+- [x] **M2** — Perform whole-codebase adversarial review and execute follow-up fixes for confirmed defects.
 - [x] **M3** — Apply Firefox WebSocket quirks per the `/resilient-ws-ui` skill.
 
 ---
@@ -35,7 +35,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 - [x] **PR-08** — Backend concurrency and lifecycle follow-up fixes.
 - [x] **PR-09** — Frontend state and API-contract follow-up fixes.
 - [x] **PR-10** — Filesystem, configuration, and external-boundary follow-up fixes.
-- [ ] **PR-11** — Final adversarial review and release verification.
+- [x] **PR-11** — Final adversarial review and release verification.
 
 ---
 
@@ -717,3 +717,51 @@ remains planned.
   - `run.sh`'s `nix eval` requires `nix` in PATH; the fallback
     degrades cleanly. Project's documented dev shell always has
     `nix` so the happy path is the default.
+
+- **PR-11** (2026-05-20) — Final adversarial review and release
+  verification. Read-only pass across all M1 + M2 + M3 work. **Verdict:
+  GO for release.** Verification: Python 50/50 pass; Node 41/41 pass;
+  pyright 0/0/0 (first clean release since PR-02); the six
+  model-tab/download regression suites pass 21/21 (DownloadIdentity 3,
+  DownloadOwnership 1, DownloadCancel 3, ProgressUnit 4, UninstalledLora
+  Guard 4, DownloadStateMachine 6). The defect ledger has zero entries
+  in `open` or `under fix` status (41 entries total, all resolved or
+  resolved-deferred). Cross-PR coupling audit covered five integration
+  paths and found all safe: PR-10's `setattr` rebind correctly reaches
+  the symbols PR-02's ownership machinery patches; `_active_lock` hold
+  in `emit_job` does not deadlock against PR-12's new broadcasts;
+  `LOADING_LOCK` is released before any cancellable region; PR-04's
+  `_HF_FETCHING_FILES_RE` and PR-06's idempotency operate on disjoint
+  state; `_modelDlBtnState` reads `download_unit` consistently with
+  PR-04's wire contract. Three documented deferrals remain
+  (PR-02-D04 row-level busy indicator, PR-04 flicker mitigated by
+  PR-09-D16, PR-10-D02 PNG metadata for skipped LoRAs); none are
+  merge-blocking. Review memo at
+  `docs/drafts/20260520-1112-pr11-final-review.md` (gitignored per
+  project convention — the ledger is the durable record).
+
+---
+
+**Milestone 2 complete (2026-05-20).** Whole-codebase review found 19
+defects (PR-07-D01..D19); all are resolved or resolved-deferred.
+Backend concurrency/lifecycle (PR-08), frontend state/API contracts
+(PR-09), and filesystem/configuration/external-boundary (PR-10) fixes
+have all shipped. Final review (PR-11) confirms no merge-blocking
+defects remain, all five known model-tab/download regression suites
+pass, pyright is clean, and the full Python + JS suites pass without
+exception. The project is release-ready.
+
+**Review-loop summary:** 12 PRs landed across three milestones (M1
+known download defects, M2 whole-codebase review, M3 Firefox WS
+quirks). 41 defect ledger entries total — 35 closed by code, 6
+resolved-deferred with documented rationale. Test count grew from 14
+Python + 10 JS at session start to 50 Python + 41 JS at session end.
+Pyright went from one pre-existing finding to clean. Three lessons
+recorded in the ledger Completed entries: (1) every test must
+exercise the production path, not a hand-crafted equivalent (the
+PR-02-D10 contextvars-propagation defect was missed by three review
+rounds because tests patched the executor payload); (2) HF
+`snapshot_download`'s outer file-count bar uses the tqdm default
+`unit='it'` — never the literal `'file'` — and is identified by its
+desc; (3) `loop.run_in_executor` does NOT propagate contextvars in
+CPython 3.13, so callers must wrap with `copy_context()` + `ctx.run`.

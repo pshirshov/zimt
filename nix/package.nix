@@ -39,7 +39,46 @@
 
 let
   inherit (lib) optional optionalString optionals;
-  pyPkgs = python.pkgs;
+
+  withoutPythonPackages = names: packages:
+    builtins.filter (pkg: !(builtins.elem (pkg.pname or (pkg.name or "")) names)) packages;
+
+  # For the XPU backend we strip torch out of every nixpkgs Python
+  # package that declares it as a dependency. The wheel set in
+  # ./wheels-xpu.nix provides torch+xpu (plus the Intel SYCL/oneAPI
+  # runtime), and the nixpkgs `torch-2.11.0` ships overlapping files
+  # (`functorch/dim/_order.py`, …) under the same site-packages
+  # subpath. `buildEnv` refuses to merge those conflicting subpaths.
+  #
+  # The override MUST live on the Python package set itself, not on
+  # ad-hoc rebindings — otherwise transitive consumers pull in the
+  # unmodified package via `propagatedBuildInputs` and the conflict
+  # re-surfaces one layer further out.
+  #
+  # We strip torch from: accelerate, peft. (transformers declares
+  # torch only as an optional extra so it doesn't reach this list.)
+  stripTorch = pkg: pkg.overridePythonAttrs (old: {
+    dependencies = withoutPythonPackages [ "torch" ] (old.dependencies or []);
+    propagatedBuildInputs = withoutPythonPackages [ "torch" ] (old.propagatedBuildInputs or []);
+    dontCheckRuntimeDeps = true;
+    pythonImportsCheck = [];
+    # Upstream tests import torch directly; with torch removed the
+    # collection phase blows up. The wheel-set torch is layered in
+    # at the env level, not at per-package build time.
+    doCheck = false;
+    doInstallCheck = false;
+  });
+  pythonForBackend =
+    if backend == "xpu"
+    then python.override {
+      packageOverrides = pySelf: pySuper: {
+        accelerate = stripTorch pySuper.accelerate;
+        peft = stripTorch pySuper.peft;
+      };
+    }
+    else python;
+
+  pyPkgs = pythonForBackend.pkgs;
 
   # Resolve a default for the named role per backend. Callers can still
   # override by passing the argument explicitly.
@@ -50,16 +89,6 @@ let
     else if backend == "cpu"  then cpuVariant
     else if backend == "xpu"  then xpuVariant
     else null;
-
-  withoutPythonPackages = names: packages:
-    builtins.filter (pkg: !(builtins.elem (pkg.pname or (pkg.name or "")) names)) packages;
-
-  accelerateWithoutTorch = pyPkgs.accelerate.overridePythonAttrs (old: {
-    dependencies = withoutPythonPackages [ "torch" ] (old.dependencies or []);
-    propagatedBuildInputs = withoutPythonPackages [ "torch" ] (old.propagatedBuildInputs or []);
-    dontCheckRuntimeDeps = true;
-    pythonImportsCheck = [];
-  });
 
   resolvedTorch       = pickDefault pytorchPackage
                           (pyPkgs.torchWithCuda or pyPkgs.torch)
@@ -76,7 +105,7 @@ let
                           pyPkgs.transformers pyPkgs.transformers;
   resolvedAccelerate  = pickDefault acceleratePackage
                           pyPkgs.accelerate pyPkgs.accelerate
-                          pyPkgs.accelerate accelerateWithoutTorch;
+                          pyPkgs.accelerate pyPkgs.accelerate;
 
   # diffusers needs to be newer than nixpkgs for Z-Image / Pony / Illustrious
   # support. v0.37.1 keeps safetensors compatible with nixpkgs 0.7.0.
@@ -113,7 +142,7 @@ let
     }
     else [];
 
-  pythonEnv = python.withPackages (ps: with ps;
+  pythonEnv = pythonForBackend.withPackages (ps: with ps;
     # Always-on common deps.
     [ fastapi
       uvicorn

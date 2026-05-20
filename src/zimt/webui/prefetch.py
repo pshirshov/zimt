@@ -64,6 +64,24 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
     if not spec.repo_id:
         raise PrefetchError(f"{kind} {name!r} has no associated HF repo")
 
+    # PR-06: idempotent — a duplicate download request for the same asset
+    # returns the existing active job rather than queueing a second download.
+    for existing in STATE.jobs.values():
+        if (
+            existing.kind == "download"
+            and existing.target_kind == kind
+            and existing.model == name
+            and existing.status in {"queued", "running"}
+        ):
+            ev = CANCEL_EVENTS.get(existing.id)
+            if ev is not None and ev.is_set():
+                # cancel-pending: the cancel event is set synchronously by
+                # job_cancel; the status transition lags until the runner
+                # reaches its checkpoint, so we skip these and let the
+                # user's retry land on a fresh Job.
+                continue
+            return existing.id
+
     job = Job(
         id=uuid.uuid4().hex,
         kind="download",

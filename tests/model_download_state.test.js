@@ -326,6 +326,52 @@ test("lora active stack can be removed even if not installed", () => {
   assert.equal(r.disabled, false);
 });
 
+test("download button shows 'download' for uninstalled model with no active job", () => {
+  const app = loadApp();
+  const r = app._modelDlBtnState({ dlJob: null, installed: false });
+  assert.equal(r.text, "download");
+  assert.equal(r.disabled, false);
+  assert.ok(typeof r.title === "string" && r.title.length > 0);
+});
+
+test("download button shows 'redownload' for installed model with no active job", () => {
+  const app = loadApp();
+  const r = app._modelDlBtnState({ dlJob: null, installed: true });
+  assert.equal(r.text, "redownload");
+  assert.equal(r.disabled, false);
+  assert.ok(typeof r.title === "string" && r.title.length > 0);
+});
+
+test("download button shows 'downloading X%' and is disabled when an active job has progress", () => {
+  const app = loadApp();
+  const r = app._modelDlBtnState({
+    dlJob: { download_n: 50, download_total: 100 },
+    installed: false,
+  });
+  assert.equal(r.text, "downloading 50%");
+  assert.equal(r.disabled, true);
+});
+
+test("download button shows 'downloading…' and is disabled when an active job has no total", () => {
+  const app = loadApp();
+  const r = app._modelDlBtnState({
+    dlJob: { download_n: 0, download_total: 0 },
+    installed: false,
+  });
+  assert.equal(r.text, "downloading…");
+  assert.equal(r.disabled, true);
+});
+
+test("download button stays disabled while active even for already-installed model", () => {
+  const app = loadApp();
+  const r = app._modelDlBtnState({
+    dlJob: { download_n: 30, download_total: 60 },
+    installed: true,
+  });
+  assert.equal(r.text, "downloading 50%");
+  assert.equal(r.disabled, true);
+});
+
 test("_loraAddBtnState renders incompatible title and disabled when compatible=false", () => {
   const app = loadApp();
   const out = app._loraAddBtnState({

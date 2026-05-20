@@ -48,6 +48,11 @@ class StateCase(unittest.IsolatedAsyncioTestCase):
         STATE.jobs.clear()
         CANCEL_EVENTS.clear()
         downloads._active_job_id = None
+        # CPython asyncio.Lock caches _loop on the contended path; resetting
+        # here makes per-test loop isolation actually hold for tests that
+        # contend _PREFETCH_LOCK (each IsolatedAsyncioTestCase gets a fresh
+        # event loop, and a cached pointer from a prior test would cross-bind).
+        setattr(prefetch._PREFETCH_LOCK, "_loop", None)
 
     def tearDown(self) -> None:
         STATE.pipe = self._pipe
@@ -269,9 +274,11 @@ class DownloadOwnershipTests(StateCase):
 
 class DownloadCancelTests(StateCase):
     async def test_queued_prefetch_canceled_before_run(self) -> None:
-        # Two prefetch jobs queue against the _PREFETCH_LOCK. We cancel the
-        # second while the first is still parked inside snapshot_download, then
-        # release the first and assert the second never invoked the downloader.
+        # Two prefetch jobs (distinct assets, since duplicate (kind, name)
+        # requests collapse to the running job per PR-06) queue against the
+        # _PREFETCH_LOCK. We cancel the second while the first is still
+        # parked inside snapshot_download, then release the first and assert
+        # the second never invoked the downloader.
         loop = asyncio.get_running_loop()
         first_started = asyncio.Event()
         release_first = threading.Event()
@@ -299,7 +306,7 @@ class DownloadCancelTests(StateCase):
 
         with patch.object(prefetch, "_snapshot_download_sync", dispatching_snapshot):
             first_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
-            second_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            second_id = await prefetch.prefetch_model("ascii-art", kind="lora")
             try:
                 await asyncio.wait_for(first_started.wait(), timeout=1)
                 # Cancel the queued second job before it acquires the lock.
@@ -397,6 +404,175 @@ class DownloadCancelTests(StateCase):
                     if job is not None and job.status in {"done", "error", "canceled"}:
                         break
                     await asyncio.sleep(0.02)
+
+
+class DownloadStateMachineTests(StateCase):
+    async def _drain(self, *job_ids: str, timeout: float = 5.0) -> None:
+        terminal = {"done", "error", "canceled"}
+        deadline_iters = int(timeout / 0.02)
+        for _ in range(deadline_iters):
+            jobs = [STATE.jobs.get(jid) for jid in job_ids]
+            if all(j is not None and j.status in terminal for j in jobs):
+                return
+            await asyncio.sleep(0.02)
+        raise RuntimeError(f"jobs did not finish: {job_ids}")
+
+    async def test_duplicate_prefetch_request_returns_existing_job_id_when_running(self) -> None:
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        release = threading.Event()
+
+        def blocked_snapshot(_repo_id: str) -> None:
+            loop.call_soon_threadsafe(started.set)
+            if not release.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release blocked prefetch")
+
+        with patch.object(prefetch, "_snapshot_download_sync", blocked_snapshot):
+            job_id_1 = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            try:
+                await asyncio.wait_for(started.wait(), timeout=1)
+                self.assertEqual(STATE.jobs[job_id_1].status, "running")
+                job_id_2 = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+                self.assertEqual(job_id_2, job_id_1)
+                matching = [
+                    j for j in STATE.jobs.values()
+                    if j.model == "pixel-art-xl" and j.target_kind == "lora"
+                ]
+                self.assertEqual(len(matching), 1)
+            finally:
+                release.set()
+                await self._drain(job_id_1)
+        self.assertEqual(STATE.jobs[job_id_1].status, "done")
+
+    async def test_duplicate_prefetch_request_returns_existing_job_id_when_queued(self) -> None:
+        loop = asyncio.get_running_loop()
+        first_started = asyncio.Event()
+        release_first = threading.Event()
+
+        # First snapshot for model A blocks; any subsequent invocation returns.
+        invocations = {"n": 0}
+
+        def dispatching_snapshot(_repo_id: str) -> None:
+            invocations["n"] += 1
+            if invocations["n"] == 1:
+                loop.call_soon_threadsafe(first_started.set)
+                if not release_first.wait(timeout=5):
+                    raise RuntimeError("timed out releasing first prefetch")
+
+        with patch.object(prefetch, "_snapshot_download_sync", dispatching_snapshot):
+            first_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            try:
+                await asyncio.wait_for(first_started.wait(), timeout=1)
+                # Model B prefetch queues behind _PREFETCH_LOCK (status "queued").
+                queued_id = await prefetch.prefetch_model("ascii-art", kind="lora")
+                self.assertEqual(STATE.jobs[queued_id].status, "queued")
+                # Duplicate request for the queued one must return same id.
+                duplicate_id = await prefetch.prefetch_model("ascii-art", kind="lora")
+                self.assertEqual(duplicate_id, queued_id)
+                matching = [
+                    j for j in STATE.jobs.values()
+                    if j.model == "ascii-art" and j.target_kind == "lora"
+                ]
+                self.assertEqual(len(matching), 1)
+            finally:
+                release_first.set()
+                await self._drain(first_id, queued_id)
+        self.assertEqual(STATE.jobs[first_id].status, "done")
+        self.assertEqual(STATE.jobs[queued_id].status, "done")
+
+    async def test_retry_after_completion_creates_new_job(self) -> None:
+        with patch.object(prefetch, "_snapshot_download_sync", lambda _r: None):
+            first_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            await self._drain(first_id)
+            self.assertEqual(STATE.jobs[first_id].status, "done")
+            second_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            await self._drain(second_id)
+        self.assertNotEqual(second_id, first_id)
+        self.assertEqual(STATE.jobs[second_id].status, "done")
+
+    async def test_retry_after_failure_creates_new_job(self) -> None:
+        def failing(_repo_id: str) -> None:
+            raise RuntimeError("synthetic prefetch failure")
+
+        with patch.object(prefetch, "_snapshot_download_sync", failing):
+            first_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            await self._drain(first_id)
+            self.assertEqual(STATE.jobs[first_id].status, "error")
+            second_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            await self._drain(second_id)
+        self.assertNotEqual(second_id, first_id)
+        self.assertEqual(STATE.jobs[second_id].status, "error")
+
+    async def test_retry_after_cancellation_creates_new_job(self) -> None:
+        # Set cancel before the runner acquires the lock so it lands "canceled
+        # before start". The snapshot fn must never be invoked for the first job.
+        call_log: list[str] = []
+
+        def should_not_run(_repo_id: str) -> None:
+            call_log.append("ran")
+
+        with patch.object(prefetch, "_snapshot_download_sync", should_not_run):
+            first_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            # The runner schedules immediately on the executor; flip cancel
+            # before the lock is acquired by setting the event synchronously.
+            ev = CANCEL_EVENTS.get(first_id)
+            self.assertIsNotNone(ev)
+            assert ev is not None
+            ev.set()
+            await self._drain(first_id)
+            self.assertEqual(STATE.jobs[first_id].status, "canceled")
+            self.assertEqual(call_log, [])
+
+            second_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            await self._drain(second_id)
+        self.assertNotEqual(second_id, first_id)
+        self.assertEqual(STATE.jobs[second_id].status, "done")
+
+    async def test_duplicate_request_during_cancel_pending_window_creates_new_job(self) -> None:
+        # Reproduces the cancel-pending race: the user clicks cancel (event
+        # set) but the runner has not yet transitioned status to "canceled".
+        # A duplicate prefetch request during this window must create a fresh
+        # job rather than collapsing onto the doomed one.
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        release = threading.Event()
+
+        def blocked_snapshot(_repo_id: str) -> None:
+            loop.call_soon_threadsafe(started.set)
+            if not release.wait(timeout=5):
+                raise RuntimeError("timed out waiting to release blocked prefetch")
+
+        with patch.object(prefetch, "_snapshot_download_sync", blocked_snapshot):
+            first_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+            try:
+                await asyncio.wait_for(started.wait(), timeout=1)
+                self.assertEqual(STATE.jobs[first_id].status, "running")
+
+                # Simulate user clicking cancel: set the event directly.
+                # Status is still "running" — the runner hasn't reached its
+                # checkpoint yet.
+                CANCEL_EVENTS[first_id].set()
+                self.assertEqual(STATE.jobs[first_id].status, "running")
+
+                # The user's retry must land on a fresh job, not the doomed one.
+                second_id = await prefetch.prefetch_model("pixel-art-xl", kind="lora")
+                self.assertNotEqual(second_id, first_id)
+                self.assertIn(second_id, STATE.jobs)
+            finally:
+                release.set()
+                # Drain both jobs to terminal state for clean teardown.
+                await self._drain(first_id, second_id, timeout=5.0)
+
+        # First job is in a terminal state (done or canceled depending on
+        # whether the runner reached a cancel checkpoint before completing).
+        self.assertIn(STATE.jobs[first_id].status, {"done", "canceled"})
+        self.assertIn(STATE.jobs[second_id].status, {"done", "error", "canceled"})
+        # Two distinct entries in STATE.jobs for the same asset.
+        matching = [
+            j for j in STATE.jobs.values()
+            if j.model == "pixel-art-xl" and j.target_kind == "lora"
+        ]
+        self.assertEqual(len(matching), 2)
 
 
 class DownloadOwnershipApiTests(StateCase):

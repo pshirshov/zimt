@@ -8,8 +8,9 @@ Status: `[ ]` planned · `[~]` in progress · `[x]` done · `[!]` blocked
 
 ## Milestones (high-level)
 
-- [~] **M1** — Resolve known model-tab/download correctness defects with regression tests.
+- [x] **M1** — Resolve known model-tab/download correctness defects with regression tests.
 - [ ] **M2** — Perform whole-codebase adversarial review and execute follow-up fixes for confirmed defects.
+- [ ] **M3** — Apply Firefox WebSocket quirks per the `/resilient-ws-ui` skill.
 
 ---
 
@@ -22,7 +23,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`. One 
 - [x] **PR-03** — Add cancellation semantics for download jobs.
 - [x] **PR-04** — Normalize Hugging Face progress units.
 - [x] **PR-05** — Prevent untracked LoRA downloads during generation.
-- [ ] **PR-06** — Consolidate model-tab download state transitions.
+- [x] **PR-06** — Consolidate model-tab download state transitions.
 
 ---
 
@@ -38,12 +39,21 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 
 ---
 
+## Milestone 3 — PR breakdown
+
+Scope: front-end WebSocket transport must remain reliable on Firefox per the `/resilient-ws-ui` skill (Firefox treats unclean closes differently than Chromium-based browsers; heartbeats, reconnect backoff, and connection-state surfacing all need explicit handling). Detail plan to be written when work begins.
+
+- [ ] **PR-12** — Apply Firefox WebSocket quirks (heartbeat / reconnect backoff / connection-state UX) per the `/resilient-ws-ui` skill. Added 2026-05-20 at user request.
+
+---
+
 ## Cross-cutting architectural notes (locked)
 
 - [x] Download jobs need asset identity separate from queue job type: `kind="download"` remains the queue discriminator; `target_kind` distinguishes base-model assets from LoRA assets. Lands in PR-01.
 - [x] Download progress ownership invariant — at most one HF download owns the progress slot at a time, acquired by job id via `set_active_download` and released by the same id via `clear_active_download`. Per-bar identity is propagated to executor workers via a `contextvars.ContextVar` (`download_context(job_id)`); callers MUST use `ctx = contextvars.copy_context()` and dispatch via `loop.run_in_executor(executor, lambda: ctx.run(func, *args))` — `run_in_executor` does NOT propagate contextvars on its own (CPython 3.13). tqdm bars constructed in the worker capture the owner id and silently drop events when it does not match the slot. Loser callers receive a passive busy state via `emit_log`; a row-level "busy" indicator is deferred to PR-06. Lands in PR-02 (D10 fix landed in PR-03 to satisfy the production assumption).
 - [x] Download cancellation invariant — each download job (`load_model` and `prefetch_model`) registers a `threading.Event` in `CANCEL_EVENTS` at Job creation and pops it on exit. Cancellation observed at controlled boundaries: loader's pre-load polling loop, prefetch's post-`_PREFETCH_LOCK` checkpoint, and `ProgressTqdm.__init__` / `update` (raises `DownloadCanceled` which is caught in both callers and ends the job with status `canceled`). `jobs_cancel_all` RPC covers both `generate` and `download` kinds. The UI renders a cancel button on queued and running download rows. Lands in PR-03.
 - [x] Progress unit invariant — every progress event carries an explicit unit category (`"bytes"` | `"files"` | `"items"` | `""`) on `Job.download_unit`. Classification: HF's byte aggregate bar (`unit='B'`) is `"bytes"`; HF's outer file-count bar (`unit='it'` default, identified by `desc` regex `^(?:\[dry-run\]\s*)?Fetching\b`) is `"files"`; any other tqdm event is `"items"`. The UI never claims byte semantics without `unit=='B'` evidence. `download_files_done` is driven exclusively by the file-count bar's current `n` (overwrite in `_emit`, never mutated by `close()`); without a file-count bar it stays 0. Lands in PR-04.
+- [x] Download state-machine invariant — duplicate `model_download` requests for the same `(target_kind, name)` while a job is `queued` or `running` (and not cancel-pending) collapse to the existing job id; cancel-pending jobs are excluded from the collapse so user-initiated retries during the cancel window land on a fresh Job. Frontend renders three button states via `_modelDlBtnState({dlJob, installed})`: "downloading [N%]" disabled while a job is active; "redownload" for installed assets; "download" otherwise. Active-job state takes precedence over the installed/uninstalled distinction. Lands in PR-06.
 - [x] LoRA dependency invariant — generation must not initiate implicit HF downloads. `is_installed(repo_id)` in `webui.models_info` is the single oracle for cache status; it scans `huggingface_hub.scan_cache_dir()` on each call and returns False on any error (safer default). `generate._apply_lora_stack` raises `UninstalledLoraError(missing)` before any `pipe.load_lora_weights(...)` call when any LoRA in the stack has an uninstalled repo. `lora_cmd.apply_lora_args` rejects uninstalled LoRAs at add time. `webui.jobs.run_job` catches `UninstalledLoraError` separately and reports a clean `str(e)`. Frontend disables the LoRA "add" button when `!installed` (active stack entries remain removable). Lands in PR-05.
 
 ---
@@ -350,3 +360,82 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
     string. If the wording changes, update the test.
   - Pre-existing `LoaderTests` failure (HTTPException vs
     ModelLoadError) remains unchanged; not in PR-05's scope.
+
+- **PR-06** (2026-05-20) — Final PR of Milestone 1. Consolidates the
+  model-tab download state transitions: (a) backend idempotency — a
+  duplicate `model_download` request for the same `(target_kind, name)`
+  while an earlier job is queued or running returns the existing
+  job_id, with one exception: jobs whose cancel event is set (but
+  whose status hasn't yet transitioned through the runner's checkpoint)
+  are *excluded* from the scan so the user's retry during the cancel
+  window lands on a fresh Job; (b) frontend — extracted
+  `_modelDlBtnState({dlJob, installed})` pure helper returning
+  `{text, disabled, title}` for the three branches (in-progress /
+  installed / fresh), mirroring PR-05's `_loraAddBtnState` pattern.
+  The retry-after-terminal paths (done / error / canceled) already
+  produced fresh job ids because each `prefetch_model` call generates
+  a new UUID; PR-06 adds explicit regression tests confirming that.
+  FIFO order across multiple queued downloads already held via
+  `_PREFETCH_LOCK`'s asyncio.Lock wait queue; unchanged.
+  Reproduction before fix:
+  - New `DownloadStateMachineTests` failed against the unmodified
+    `prefetch_model`: duplicate calls for the same `(kind, name)`
+    created multiple Jobs, and the new frontend tests failed because
+    `_modelDlBtnState` did not exist yet.
+  Verification:
+  - `LD_LIBRARY_PATH=...HF_XET_HIGH_PERFORMANCE=1 .venv/bin/python -m unittest tests.test_webui_service.DownloadStateMachineTests`
+    → pass, 6 tests (running-duplicate, queued-duplicate, retry after
+    done/error/canceled, retry-during-cancel-pending).
+  - `.venv/bin/python -m unittest discover -s tests` → 36 tests, 35
+    pass, 1 pre-existing failure unchanged
+    (`LoaderTests.test_failed_load_clears_stale_config_and_same_model_reloads`).
+  - `node --test tests/*.test.js` → 25/25 pass (5 new
+    `_modelDlBtnState` branch tests).
+  - `nix develop --command pyright src/zimt` → only the pre-existing
+    tqdm monkey-patch finding; no new findings.
+  Review:
+  - Round 1 found three nits and two real but minor concerns
+    (PR-06-D01 cancel-pending window leak; PR-06-D02 misplaced lock
+    workaround). Both fixed.
+  - Round 2 confirmed both fixes correct, the D01 test runs 5/5 across
+    repeated invocations (not flaky), and no regressions to PR-03
+    cancellation tests when the `_PREFETCH_LOCK._loop` reset moved into
+    `StateCase`. Clean.
+  Notes / constraints:
+  - The asyncio.Lock cross-loop binding workaround
+    (`prefetch._PREFETCH_LOCK._loop = None` in `StateCase.setUp`) is a
+    necessary CPython quirk: `asyncio.Lock` caches `_loop` as an
+    instance attribute on its contended path; subsequent
+    `IsolatedAsyncioTestCase` runs would otherwise raise
+    `RuntimeError: <Lock [locked]> is bound to a different event
+    loop`. Production runs one persistent event loop, so the
+    workaround is purely test-infrastructure.
+  - The plan's PR-06 "Cover the complete model-tab state machine"
+    scope was honoured for state-transitions and retry semantics. The
+    deferred row-level "busy" indicator for the load-loser
+    (PR-02-D04) and the bar-flicker between file-count and byte
+    counters (PR-04 follow-up) both require a `Job` model
+    refactor (new field for `progress_owner: bool`, splitting
+    `download_n/total` into per-unit slots). They were intentionally
+    left out of PR-06's scope and remain as future work — see the
+    cross-cutting notes for the deferral rationale.
+  - Cancel-pending detection in idempotency: the scan checks
+    `CANCEL_EVENTS.get(existing.id).is_set()`. If a future code path
+    forgets to register a cancel event for a download Job, the scan
+    treats it as "not cancel-pending" and may collapse retries into
+    it. PR-03's loader/prefetch both create cancel events at Job
+    creation, so this is currently safe. A regression test would be
+    valuable if a future PR adds another download path.
+  - Pre-existing `LoaderTests` failure (HTTPException vs
+    ModelLoadError) remains unchanged; not in PR-06's scope.
+
+---
+
+**Milestone 1 complete (2026-05-20).** All six known model-tab/download
+correctness defects have regression tests and shipped fixes.
+Cross-cutting invariants are locked in tasks.md's "Cross-cutting
+architectural notes (locked)" section. Two design choices were
+intentionally deferred to future work (and recorded in defects.md as
+PR-02-D04 + the PR-04 flicker note): a Job-level `progress_owner` flag
+and per-unit `download_*` slots; both require a Job dataclass refactor.
+The whole-codebase review (M2) will pick up next.

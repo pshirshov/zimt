@@ -1097,18 +1097,10 @@ function _addCommonMeta(li, m, kind, downloadingByName, opts = {}) {
 
   const dlBtn = document.createElement("button");
   dlBtn.className = "section-btn";
-  if (dlJob) {
-    const pct = dlJob.download_total > 0
-      ? Math.round(100 * dlJob.download_n / dlJob.download_total) : null;
-    dlBtn.textContent = pct == null ? "downloading…" : `downloading ${pct}%`;
-    dlBtn.disabled = true;
-  } else if (m.installed) {
-    dlBtn.textContent = "redownload";
-    dlBtn.title = "re-fetch from HF (will refresh any updated weights)";
-  } else {
-    dlBtn.textContent = "download";
-    dlBtn.title = "fetch from HF without loading";
-  }
+  const dlState = _modelDlBtnState({ dlJob, installed: !!m.installed });
+  dlBtn.textContent = dlState.text;
+  dlBtn.disabled = dlState.disabled;
+  dlBtn.title = dlState.title;
   dlBtn.onclick = async () => {
     dlBtn.disabled = true; dlBtn.textContent = "starting…";
     try {
@@ -1166,6 +1158,30 @@ function renderBases() {
     li.appendChild(actions);
     root.appendChild(li);
   }
+}
+
+function _modelDlBtnState({ dlJob, installed }) {
+  if (dlJob) {
+    const pct = dlJob.download_total > 0
+      ? Math.round(100 * dlJob.download_n / dlJob.download_total) : null;
+    return {
+      text: pct == null ? "downloading…" : `downloading ${pct}%`,
+      disabled: true,
+      title: "download in progress",
+    };
+  }
+  if (installed) {
+    return {
+      text: "redownload",
+      disabled: false,
+      title: "re-fetch from HF (will refresh any updated weights)",
+    };
+  }
+  return {
+    text: "download",
+    disabled: false,
+    title: "fetch from HF without loading",
+  };
 }
 
 function _loraAddBtnState({ compatible, loaded, dlJob, isActive, installed, compat, baseTags }) {

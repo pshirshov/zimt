@@ -1024,6 +1024,21 @@ function onGpuStats(s) {
 }
 
 // ---------- GPU pill dropdown menu (unload model, …) ----------
+function _positionGpuMenu() {
+  // Align the menu's right edge with the pill's right edge, just below
+  // the pill. position:fixed coords from the pill's bounding rect; this
+  // is robust to scroll and responsive layout shifts.
+  const pill = $("gpu-stats");
+  const menu = $("gpu-menu");
+  if (!pill || !menu) return;
+  const r = pill.getBoundingClientRect();
+  const menuW = menu.offsetWidth || 140;
+  // Right-align under the pill, but never run off the left edge.
+  const rightEdge = Math.max(menuW + 4, r.right);
+  menu.style.left = Math.round(rightEdge - menuW) + "px";
+  menu.style.top  = Math.round(r.bottom + 4) + "px";
+}
+
 function _setGpuMenu(open) {
   const pill = $("gpu-stats");
   const menu = $("gpu-menu");
@@ -1039,6 +1054,7 @@ function _setGpuMenu(open) {
       unload.disabled = !(state && state.loaded);
       unload.title = unload.disabled ? "no model is currently loaded" : "release the pipeline and free device memory";
     }
+    _positionGpuMenu();
   }
 }
 
@@ -1080,6 +1096,10 @@ function _initGpuMenu() {
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && !menu.hidden) _setGpuMenu(false);
   });
+  // Keep the menu anchored to the pill when the viewport shifts.
+  window.addEventListener("resize", () => { if (!menu.hidden) _positionGpuMenu(); });
+  window.addEventListener("scroll", () => { if (!menu.hidden) _positionGpuMenu(); },
+                         { passive: true });
 }
 _initGpuMenu();
 

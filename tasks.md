@@ -9,7 +9,7 @@ Status: `[ ]` planned · `[~]` in progress · `[x]` done · `[!]` blocked
 ## Milestones (high-level)
 
 - [x] **M1** — Resolve known model-tab/download correctness defects with regression tests.
-- [ ] **M2** — Perform whole-codebase adversarial review and execute follow-up fixes for confirmed defects.
+- [~] **M2** — Perform whole-codebase adversarial review and execute follow-up fixes for confirmed defects.
 - [x] **M3** — Apply Firefox WebSocket quirks per the `/resilient-ws-ui` skill.
 
 ---
@@ -31,7 +31,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`. One 
 
 Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 
-- [ ] **PR-07** — Whole-codebase review inventory and defect triage.
+- [x] **PR-07** — Whole-codebase review inventory and defect triage.
 - [ ] **PR-08** — Backend concurrency and lifecycle follow-up fixes.
 - [ ] **PR-09** — Frontend state and API-contract follow-up fixes.
 - [ ] **PR-10** — Filesystem, configuration, and external-boundary follow-up fixes.
@@ -521,3 +521,33 @@ quirks the user flagged are now closed: silent NAT drops have
 zero-gap failover, BFCache is supported, and Network Information
 API changes are observed. M2 (whole-codebase adversarial review)
 remains planned.
+
+- **PR-07** (2026-05-20) — Whole-codebase adversarial review pass.
+  Read-only inventory of every subsystem (backend webui, generation
+  core, frontend, tests, config/packaging, filesystem/external
+  boundaries). No source code changes. Produced a review memo at
+  `docs/drafts/20260520-1014-pr07-codebase-review.md` and 19 defect
+  entries in `defects.md` under `## PR-07` (PR-07-D01..PR-07-D19).
+  Severity split: 5 major, 13 minor, 1 nit. Notable finds:
+  `STATE.loading_model` check-then-set race across an await (D03);
+  unretained `asyncio.create_task` background tasks vulnerable to
+  GC (D05); `dataclasses.replace(STATE.g)` shares `lora_stack` by
+  reference with the live config (D08); `outputs_cleanup` follows
+  symlinks (D04); empty-Origin CSRF bypass (D06); `is_installed`
+  full HF cache scan on every generation (D13). Two pre-existing
+  items M1 explicitly named are now logged as D01 (LoaderTests
+  HTTPException/ModelLoadError mismatch) and D02 (pyright tqdm
+  monkey-patch finding). Follow-up fixes are routed by domain:
+  PR-08 backend (D01, D03, D05, D07–D13); PR-09 frontend (D15–D18);
+  PR-10 boundaries (D02, D04, D06, D14, D19). PR-11 is the final
+  release-verification pass.
+  Verification: this PR has no source code changes; the verification
+  is the integrity of the review itself. Memo cites file:line for
+  every defect; each defect carries Description + Root cause +
+  Suggested fix per the ledger schema.
+  Notes / constraints:
+  - The memo's "Tests" section notes coverage gaps (`_gpu_stats_loop`,
+    heartbeat watchdog, `outputs_cleanup` symlinks) that were not
+    raised as separate defects per the brief's "quality not
+    coverage" framing. PR-08/PR-09 fix work should add regression
+    tests for any defect whose fix lands.

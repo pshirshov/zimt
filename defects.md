@@ -150,3 +150,21 @@ Net production effects:
 **Location:** `tests/test_webui_service.py` — `DownloadStateMachineTests.setUp` setting `prefetch._PREFETCH_LOCK._loop = None`.
 **Description:** Confirmed reproducible against Python 3.13: `asyncio.Lock` only sets `_loop` as an instance attribute on the *contended* path (`_get_loop()` is called from `_waiters` machinery). After the first contended use, the attribute caches the event loop pointer. A subsequent contended use on a new `IsolatedAsyncioTestCase`-spawned loop raises `RuntimeError: <Lock [locked]> is bound to a different event loop`. The runner task dies silently ("Task exception was never retrieved"), the job never reaches a terminal state, and the test's drain logic times out. PR-06 worked around this only inside `DownloadStateMachineTests.setUp`, so the fix is not inherited by `DownloadCancelTests` or future classes whose alphabetical ordering interleaves with the suite (today's order happens to work — but a future class named `DownloadE*` / `DownloadM*` that contends the lock would not be covered). The right home is `StateCase.setUp`.
 **Fix:** `tests/test_webui_service.py:51-55` — the `setattr(prefetch._PREFETCH_LOCK, "_loop", None)` reset now lives in `StateCase.setUp` (alongside the other module-global resets) with an explanatory comment. `DownloadStateMachineTests.setUp` was removed entirely — the class now inherits `StateCase.setUp` directly, so the reset applies suite-wide.
+
+---
+
+## PR-12
+
+## [PR-12-D01] ConnectionManager.destroy() leaks lifecycle listeners on window/document/navigator
+**Status:** resolved
+**Severity:** minor
+**Location:** `static/connection.js` — `_wireLifecycle` registers `visibilitychange`/`pagehide`/`pageshow`/`online`/`navigator.connection.change` handlers; `destroy()` does not remove any of them.
+**Description:** Each `new ConnectionManager(...)` adds five global listeners; `destroy()` clears timers and closes sockets but does not call `removeEventListener` on any of them. Handlers are guarded by `if (this.destroyed) return;` so they don't act after destroy, but the listener nodes themselves accumulate on `navigator.connection`, `window`, and `document` across repeated create/destroy cycles (hot-reload, test fixtures, future SPA flows). Symptom is memory growth, not incorrect behaviour. Pre-existing pattern (the prior single-socket manager had the same gap) but more visible after PR-12 added the NetInfo listener.
+**Fix:** `static/connection.js` — `_wireLifecycle` (lines ~735-840) now creates each handler as `this._onVisibilityChange / _onPageHide / _onPageShow / _onOnline / _onNetInfoChange` before registering, and `destroy()` (lines ~369-385) calls `removeEventListener` for each with the same conditional guards used at registration (window/document fallback for pagehide/pageshow; `navigator.connection && typeof addEventListener === "function"` for NetInfo).
+
+## [PR-12-D02] connection_manager.test.js "MAX_LIVE_CONNECTIONS cap" test does not exercise the cap-rejection branch
+**Status:** resolved
+**Severity:** nit
+**Location:** `tests/connection_manager.test.js` — `test("MAX_LIVE_CONNECTIONS cap honoured ...")`.
+**Description:** The test only asserts `liveCount <= 3` at the end of a STALE-chain drive. By design the chain only produces 2 live connections at any moment (each STALE goes DEAD before the next replacement reaches NEW), so the cap-rejection branch in `_spawnConnection` (`if (this._liveConnections().length >= MAX_LIVE_CONNECTIONS) return null;`) is never executed. The assertion would pass even with `MAX_LIVE_CONNECTIONS = 999`.
+**Fix:** `tests/connection_manager.test.js` — the cap test now passes `extraOpts: { staleGraceMs: 30_000 }` so three concurrent STALE connections can coexist without the oldest's grace timer expiring. The test drives ws0 to STALE (spawning ws1), forces ws1 to STALE via direct `_enterStale()`, calls `manager._spawnConnection()` to add ws2 (2 live < 3 cap, succeeds), forces ws2 to STALE, then calls `manager._spawnConnection()` once more — this invocation hits the `if (this._liveConnections().length >= MAX_LIVE_CONNECTIONS) return null` branch. The assertion `wsRegistry.length === 3` (not 4) verifies the rejection.

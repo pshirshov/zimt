@@ -10,7 +10,7 @@ Status: `[ ]` planned · `[~]` in progress · `[x]` done · `[!]` blocked
 
 - [x] **M1** — Resolve known model-tab/download correctness defects with regression tests.
 - [ ] **M2** — Perform whole-codebase adversarial review and execute follow-up fixes for confirmed defects.
-- [ ] **M3** — Apply Firefox WebSocket quirks per the `/resilient-ws-ui` skill.
+- [x] **M3** — Apply Firefox WebSocket quirks per the `/resilient-ws-ui` skill.
 
 ---
 
@@ -43,7 +43,7 @@ Detail in `./docs/drafts/20260519-2333-model-download-review-loop-plan.md`.
 
 Scope: front-end WebSocket transport must remain reliable on Firefox per the `/resilient-ws-ui` skill (Firefox treats unclean closes differently than Chromium-based browsers; heartbeats, reconnect backoff, and connection-state surfacing all need explicit handling). Detail plan to be written when work begins.
 
-- [ ] **PR-12** — Apply Firefox WebSocket quirks (heartbeat / reconnect backoff / connection-state UX) per the `/resilient-ws-ui` skill. Added 2026-05-20 at user request.
+- [x] **PR-12** — Apply Firefox WebSocket quirks (heartbeat / reconnect backoff / connection-state UX) per the `/resilient-ws-ui` skill. Added 2026-05-20 at user request.
 
 ---
 
@@ -439,3 +439,85 @@ intentionally deferred to future work (and recorded in defects.md as
 PR-02-D04 + the PR-04 flicker note): a Job-level `progress_owner` flag
 and per-unit `download_*` slots; both require a Job dataclass refactor.
 The whole-codebase review (M2) will pick up next.
+
+- **PR-12** (2026-05-20) — Closed the Firefox-pertinent gaps from the
+  `/resilient-ws-ui` skill. `static/connection.js` is refactored into a
+  per-socket `Connection` class and a pool-orchestrator
+  `ConnectionManager`. Three patterns shipped: **(R6) overlapping
+  connection failover** — when the active socket goes STALE the
+  manager spawns a replacement in parallel; whichever reaches ALIVE
+  first wins and the loser is closed with the application-private
+  code 4002 "superseded"; pool capped at `MAX_LIVE_CONNECTIONS = 3`.
+  This is the canonical mitigation for Firefox bug 920074 (silent
+  NAT drops with no `close` event). **(R9) BFCache wiring** —
+  `pagehide(persisted=true)` closes all sockets with code 1001 and
+  parks reconnect via `_bfcacheParked` so the page is BFCache-eligible;
+  `pageshow(persisted=true)` clears the flag, resets attempts to 0,
+  and reconnects immediately. **(R9) Network Information API** — the
+  `change` listener on `navigator.connection` is now actually attached
+  and pings the active socket on path change. The public `stats()`
+  shape preserves all keys consumed by `app.js:deriveWidget`
+  (`state`/`attempt`/`maxAttempts`/`isTerminal`/`deferredOnVisible`/
+  `pendingPings`/`nextReconnectInMs`/`lastCloseCode`/`lastCloseReason`)
+  while adding `connections[]`, `activeConnectionId`, `pool`,
+  `frozen`. `app.js` required zero changes — the widget renders
+  correctly off the preserved keys, with state-fallback ranked
+  ALIVE > NEW > STALE > DEAD when no active is set so the bootstrap
+  pill shows "connecting…" rather than "disconnected".
+  Reproduction before fix:
+  - The two PR-12 tests for overlapping failover and BFCache failed
+    against the pre-refactor single-socket manager: STALE didn't
+    spawn a replacement, and `pagehide(persisted)` did nothing
+    useful.
+  Verification:
+  - `node --test tests/*.test.js` → 33/33 pass (25 → 33; 8 new
+    tests in `tests/connection_manager.test.js` covering single-
+    connection happy path, STALE-triggers-replacement, late-pong
+    promotes-back-and-supersedes-replacement, replacement-wins-
+    and-supersedes-stale, MAX_LIVE_CONNECTIONS cap actually hits
+    the rejection branch, `pagehide(persisted)` closes-without-
+    reconnect, `pageshow(persisted)` reconnects-immediately, and
+    `request()` routes through the new active after promotion).
+  - `.venv/bin/python -m unittest discover -s tests` → 36 tests,
+    35 pass, 1 pre-existing failure unchanged
+    (`LoaderTests.test_failed_load_clears_stale_config_and_same_model_reloads`).
+  - `nix develop --command pyright src/zimt` → only the pre-existing
+    tqdm monkey-patch finding; no new findings.
+  Review:
+  - One round of adversarial review found five issues, two of
+    which were closed in this PR (PR-12-D01 listener leak on
+    `destroy()`, PR-12-D02 weak cap test). The other three (F-3
+    `pendingPings` aggregation, F-4 stale `lastCloseCode` on
+    pageshow, F-5 dead-code `_pickActiveFromPool`) were considered
+    and discarded as informational. Promotion scenarios (a)/(b)/(c)/
+    (d) all audit correctly; superseded-close path is race-free
+    because `_supersededClose` is set synchronously before
+    `ws.close()`. BFCache + time-jump detector interaction is
+    benign — on `pageshow` there is no active connection, so the
+    post-resume tick is a no-op and the pageshow-scheduled
+    immediate reconnect runs without a duplicate race.
+  Notes / constraints:
+  - Server side (`src/zimt/webui/app.py:444-534`) was not touched —
+    it already does nonce-correlated ping/pong with watchdog;
+    the skill's R11 (Node-specific `setImmediate` ordering) does
+    not apply to Python asyncio.
+  - Intentional gaps remaining (per the file's updated docblock):
+    R14 main-thread heartbeat — Chrome throttles main-thread
+    timers in heavily-backgrounded tabs and the heartbeats stop
+    until visible; a dedicated Web Worker would fix this but is
+    out of scope for a single-tab tool. Session resumption — a
+    reconnect is still a fresh logical session; the server's
+    "hello" state + in-flight Jobs is sufficient for zimt today.
+  - Test harness uses a `FakeWS` injected via the `opts.WebSocket`
+    constructor option and a virtual-time `setTimeout`/`setInterval`
+    harness; no real WebSocket connections are opened in tests.
+  - Pre-existing `LoaderTests` failure (HTTPException vs
+    ModelLoadError) remains unchanged; not in PR-12's scope.
+
+---
+
+**Milestone 3 complete (2026-05-20).** The Firefox WebSocket
+quirks the user flagged are now closed: silent NAT drops have
+zero-gap failover, BFCache is supported, and Network Information
+API changes are observed. M2 (whole-codebase adversarial review)
+remains planned.

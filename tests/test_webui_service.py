@@ -1433,3 +1433,63 @@ class ModelUnloadTests(StateCase):
         # Pipe and config must NOT have been cleared.
         self.assertIsNotNone(STATE.pipe)
         self.assertIsNotNone(STATE.g)
+
+
+class UnloadHelperTests(unittest.TestCase):
+    """zimt.generate.unload must release pipe submodule references even
+    when the caller still holds the outer pipe wrapper. Without this,
+    `empty_cache()` cannot return VRAM because the submodule tensors
+    are still reachable from Python."""
+
+    def test_unload_clears_submodule_slots_in_place(self) -> None:
+        """Caller still has a reference to the wrapper, but its
+        registered components must be detached so the underlying
+        nn.Module tensors are no longer reachable."""
+        import gc
+        import weakref
+
+        import torch
+        from zimt.generate import unload
+
+        class FakePipe:
+            def __init__(self) -> None:
+                self.unet = torch.nn.Linear(4, 4)
+                self.vae = torch.nn.Linear(4, 4)
+
+            @property
+            def components(self) -> dict[str, object]:
+                return {"unet": self.unet, "vae": self.vae}
+
+        pipe = FakePipe()
+        unet_ref = weakref.ref(pipe.unet)
+        vae_ref = weakref.ref(pipe.vae)
+
+        unload(pipe)
+
+        # Caller's wrapper survives, but its slots have been emptied.
+        self.assertIsNone(pipe.unet)
+        self.assertIsNone(pipe.vae)
+        # And no other Python reference is keeping the submodules alive.
+        gc.collect()
+        self.assertIsNone(
+            unet_ref(), "unet was not garbage-collected after unload"
+        )
+        self.assertIsNone(
+            vae_ref(), "vae was not garbage-collected after unload"
+        )
+
+    def test_unload_handles_none_pipe(self) -> None:
+        """Defensive: unload(None) must not raise."""
+        from zimt.generate import unload
+
+        unload(None)  # should be a quiet no-op
+
+    def test_unload_tolerates_missing_components_attr(self) -> None:
+        """If a pipe-like object exposes no `components`, unload must
+        still complete and run gc/empty_cache without raising."""
+        from zimt.generate import unload
+
+        class Bare:
+            pass
+
+        unload(Bare())

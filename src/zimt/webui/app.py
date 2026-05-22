@@ -264,10 +264,15 @@ async def _rpc_model_unload(_params: dict[str, Any]) -> dict[str, Any]:
         if STATE.pipe is None:
             return {"ok": True, "reason": "no model loaded"}
         from ..generate import unload as _unload_pipe
-        pipe = STATE.pipe
+        # Null STATE first so a failed unload doesn't leave the UI
+        # claiming a model is loaded. unload() walks the wrapper and
+        # nulls its submodule slots in place, so VRAM is released even
+        # though we still hold the wrapper here for the call.
+        pipe_to_release = STATE.pipe
         STATE.pipe = None
         STATE.g = None
-        _unload_pipe(pipe)
+        _unload_pipe(pipe_to_release)
+        pipe_to_release = None  # noqa: F841 — drop final wrapper ref
     await emit_state()
     await broadcast({"type": "model_unloaded"})
     return {"ok": True}

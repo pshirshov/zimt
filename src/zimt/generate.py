@@ -294,9 +294,45 @@ def generate(
     return out
 
 
+def _release_pipe_components(pipe: Any) -> None:
+    # Wrapped in its own function so the loop locals (`sub`, `mover`,
+    # `components`) die at return — leaving no stray references that
+    # would keep submodule tensors alive past the caller's gc pass.
+    components: dict[str, Any] = getattr(pipe, "components", {}) or {}
+    for name in list(components.keys()):
+        sub = getattr(pipe, name, None)
+        if sub is None:
+            continue
+        mover = getattr(sub, "to", None)
+        if callable(mover):
+            try:
+                sub.to("cpu")
+            except Exception as e:
+                _log.debug("unload: failed to move %s to cpu: %r", name, e)
+        try:
+            setattr(pipe, name, None)
+        except Exception as e:
+            _log.debug("unload: failed to clear pipe.%s: %r", name, e)
+
+
 def unload(pipe: Any) -> None:
-    """Release a pipeline's references and try to free device memory."""
-    del pipe
+    """Release a diffusers pipeline's submodules and try to free device memory.
+
+    `del pipe` on a parameter only drops the local binding; if the
+    caller still references the wrapper, the UNet/VAE/text-encoder
+    submodules — which actually own the VRAM — stay alive and
+    ``empty_cache`` returns nothing useful. So we walk the pipe's
+    registered components, move each ``nn.Module`` to CPU and null
+    the wrapper's slot. The device tensors then become unreachable
+    even if the caller's wrapper reference outlives this call.
+
+    Note: ``empty_cache`` only returns *unused* allocator-cached blocks
+    to the driver. The torch allocator may keep an arena reserved per
+    process; that reservation only fully releases on process exit.
+    """
+    if pipe is not None:
+        _release_pipe_components(pipe)
+    pipe = None  # noqa: F841 — drop our parameter binding before gc
     gc.collect()
     if hasattr(torch, "xpu") and torch.xpu.is_available():
         torch.xpu.empty_cache()

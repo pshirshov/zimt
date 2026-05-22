@@ -242,6 +242,8 @@
   .queue-item .qstatus { flex: 0 0 60px; color: var(--muted); }
   .queue-item .qprompt { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .queue-item .qseed   { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+  .queue-item .qduration { flex: 0 0 auto; color: var(--muted); font-size: 11px;
+    font-variant-numeric: tabular-nums; }
   .queue-item .qprogress { flex: 0 0 60px; height: 5px; background: #1a1a1f;
     border-radius: 2px; overflow: hidden; }
   .queue-item .qprogress > div { height: 100%; background: var(--accent);

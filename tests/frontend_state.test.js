@@ -37,6 +37,7 @@ class FakeElement {
     this.offsetParent = null;
   }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  append(...nodes) { for (const n of nodes) this.appendChild(n); }
   removeChild(child) {
     const i = this.children.indexOf(child);
     if (i >= 0) this.children.splice(i, 1);
@@ -307,6 +308,160 @@ test("PR-02-D04: queue row for a non-owning download shows 'waiting' label and n
   assert.match(prompt.textContent, /waiting/,
     `expected 'waiting' in row label, got: ${prompt.textContent}`);
   assert.equal(bar, null, "expected no .qprogress bar when progress_owner=false");
+});
+
+// ---------- cached-load phase: model load with no actual bytes downloaded ----------
+
+function findChild(row, className) {
+  for (const child of row.children) {
+    const cn = typeof child.className === "string" ? child.className : "";
+    if (cn.includes(className)) return child;
+  }
+  return null;
+}
+
+test("cached load: queue row says 'loading' (not 'downloading') when no progress fields are populated", () => {
+  const app = loadApp();
+  // load_model() creates a kind=="download" job before the tqdm bridge has
+  // fired. For a fully cached snapshot, the bridge never fires at all and
+  // download_file / counters stay empty.
+  app.onJob({
+    id: "load-cached",
+    kind: "download",
+    target_kind: "base",
+    status: "running",
+    model: "z-image-turbo",
+    download_file: "",
+    download_bytes_n: 0, download_bytes_total: 0,
+    download_files_n: 0, download_files_total: 0,
+    download_files_done: 0,
+    progress_owner: true,
+  });
+  const queueList = app.document.getElementById("queue-list");
+  const row = queueList.children[0];
+  const status = findChild(row, "qstatus");
+  const prompt = findChild(row, "qprompt");
+  assert.ok(status, "expected qstatus");
+  assert.ok(prompt, "expected qprompt");
+  assert.equal(status.textContent, "loading",
+    `expected status 'loading', got: ${status.textContent}`);
+  // The "(starting)" filler must not be shown when nothing is being
+  // transferred — the row reads "z-image-turbo" alone.
+  assert.equal(prompt.textContent, "z-image-turbo",
+    `expected bare model name, got: ${prompt.textContent}`);
+});
+
+test("active download: queue row says 'downloading' and shows the file + counter", () => {
+  const app = loadApp();
+  app.onJob({
+    id: "dl-active",
+    kind: "download",
+    target_kind: "base",
+    status: "running",
+    model: "z-image-turbo",
+    download_file: "weights.safetensors",
+    download_bytes_n: 512, download_bytes_total: 1024,
+    download_files_n: 0, download_files_total: 0,
+    download_files_done: 0,
+    progress_owner: true,
+  });
+  const queueList = app.document.getElementById("queue-list");
+  const row = queueList.children[0];
+  const status = findChild(row, "qstatus");
+  const prompt = findChild(row, "qprompt");
+  assert.equal(status.textContent, "downloading");
+  assert.match(prompt.textContent, /weights\.safetensors/);
+  assert.match(prompt.textContent, /512/);
+});
+
+test("finished download: status reads the terminal state, not 'loading'", () => {
+  const app = loadApp();
+  app.onJob({
+    id: "dl-done",
+    kind: "download",
+    target_kind: "base",
+    status: "done",
+    model: "z-image-turbo",
+    download_file: "",
+    download_bytes_n: 0, download_bytes_total: 0,
+    download_files_n: 0, download_files_total: 0,
+    download_files_done: 0,
+    ts_queued: 1000.0,
+    ts_done: 1012.5,
+  });
+  const row = app.document.getElementById("queue-list").children[0];
+  const status = findChild(row, "qstatus");
+  assert.equal(status.textContent, "done",
+    "finished cached-load row must read 'done' rather than the in-progress phase");
+});
+
+// ---------- duration display on finished jobs ----------
+
+test("finished generate job shows duration in seconds", () => {
+  const app = loadApp();
+  app.onJob({
+    id: "gen-1",
+    kind: "generate",
+    status: "done",
+    model: "z-image-turbo",
+    raw_prompt: "a cat",
+    seed: 42,
+    step: 28, total_steps: 28,
+    ts_queued: 1000.0,
+    ts_done: 1012.5,
+  });
+  const row = app.document.getElementById("queue-list").children[0];
+  const dur = findChild(row, "qduration");
+  assert.ok(dur, "expected a .qduration span on a finished generate row");
+  assert.equal(dur.textContent, "12.5s");
+});
+
+test("finished download job shows duration", () => {
+  const app = loadApp();
+  app.onJob({
+    id: "dl-done-2",
+    kind: "download",
+    target_kind: "base",
+    status: "done",
+    model: "pony-v6-xl",
+    download_bytes_n: 0, download_bytes_total: 0,
+    download_files_n: 0, download_files_total: 0,
+    ts_queued: 2000.0,
+    ts_done: 2090.0,
+  });
+  const row = app.document.getElementById("queue-list").children[0];
+  const dur = findChild(row, "qduration");
+  assert.ok(dur, "expected a .qduration span on a finished download row");
+  assert.equal(dur.textContent, "1m 30s",
+    `expected '1m 30s', got: ${dur.textContent}`);
+});
+
+test("running job has no duration span yet", () => {
+  const app = loadApp();
+  app.onJob({
+    id: "gen-running",
+    kind: "generate",
+    status: "running",
+    model: "z-image-turbo",
+    raw_prompt: "a dog",
+    seed: 7,
+    step: 5, total_steps: 28,
+    ts_queued: 1000.0,
+    ts_done: null,
+  });
+  const row = app.document.getElementById("queue-list").children[0];
+  const dur = findChild(row, "qduration");
+  assert.equal(dur, null, "running rows must not carry a duration");
+});
+
+test("fmtDuration covers sub-second, second, and minute ranges", () => {
+  const app = loadApp();
+  assert.equal(app.fmtDuration(0.25), "250ms");
+  assert.equal(app.fmtDuration(0.999), "999ms");
+  assert.equal(app.fmtDuration(1.0), "1.0s");
+  assert.equal(app.fmtDuration(45.3), "45.3s");
+  assert.equal(app.fmtDuration(60), "1m 0s");
+  assert.equal(app.fmtDuration(125), "2m 5s");
 });
 
 // ---------- D17: dlBtn restores text after click resolves ----------

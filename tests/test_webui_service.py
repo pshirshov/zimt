@@ -144,6 +144,38 @@ class ExecValidationTests(StateCase):
         self.assertEqual(captured[0].steps, 31)
         self.assertEqual(captured[0].cfg, 4.5)
 
+    async def test_model_exec_does_not_double_log_loading_message(self) -> None:
+        # The "loading X…" line in the UI log should appear at most once per
+        # /model invocation. Previously exec_api.api_exec emitted "loading
+        # model: X" *and* load_model() broadcast "model_loading" (which the JS
+        # surfaces as "loading X…"), producing two near-identical lines.
+        load_calls: list[str] = []
+
+        def succeed(name: str) -> None:
+            load_calls.append(name)
+            STATE.pipe = object()
+            STATE.g = _config_for(name)
+
+        emitted: list[str] = []
+
+        async def fake_emit_log(msg: str, level: str = "info") -> None:
+            emitted.append(msg)
+
+        with (
+            patch.object(loader, "_do_load_sync", succeed),
+            patch.object(exec_api, "emit_log", fake_emit_log),
+            patch.object(loader, "emit_log", fake_emit_log),
+        ):
+            await exec_api.api_exec(ExecBody(line="/model z-image-turbo"))
+
+        self.assertEqual(load_calls, ["z-image-turbo"])
+        loading_lines = [m for m in emitted if "loading" in m.lower()]
+        self.assertEqual(
+            loading_lines, [],
+            f"exec_api must not emit any 'loading…' log line — the model_loading "
+            f"broadcast already produces one on the client. Got: {loading_lines}",
+        )
+
     async def test_generation_rejected_while_model_load_pending(self) -> None:
         STATE.pipe = object()
         STATE.g = _config_for("z-image-turbo")

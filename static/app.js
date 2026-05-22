@@ -249,6 +249,29 @@ function fmtBytes(n) {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+// Distinguish "downloading bytes" from "loading from cache". A model load
+// is modelled as kind=="download" because that's where the HF byte-bar
+// bridge attaches; but when the snapshot is already cached, no tqdm bar
+// ever fires and the user is just waiting for the in-memory pipeline to
+// build. Saying "downloading … (starting)" in that case is misleading.
+function _dlPhase(j) {
+  const active = (j.download_file && j.download_file !== "")
+              || (j.download_bytes_total || 0) > 0
+              || (j.download_files_total || 0) > 0
+              || (j.download_bytes_n || 0) > 0
+              || (j.download_files_n || 0) > 0;
+  return active ? "downloading" : "loading";
+}
+
+function fmtDuration(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}m ${s}s`;
+}
+
 function fmtDownloadCounter(j) {
   // Per-unit slots: files and bytes can both be populated during a real
   // HF snapshot_download (outer thread_map bar + per-file byte bar).
@@ -274,18 +297,30 @@ function renderQueue() {
     const li = document.createElement("li");
     li.className = "queue-item status-" + j.status + " kind-" + (j.kind || "generate");
     const status = document.createElement("span"); status.className = "qstatus";
-    status.textContent = j.kind === "download" ? "downloading" : j.status;
+    const dlPhase = j.kind === "download" ? _dlPhase(j) : null;
+    // For finished/error/canceled download jobs, fall through to j.status so
+    // the row reads "done" / "error" / "canceled" rather than "loading".
+    if (j.kind === "download" && (j.status === "running" || j.status === "queued")) {
+      status.textContent = dlPhase;
+    } else {
+      status.textContent = j.status;
+    }
     li.appendChild(status);
     if (j.kind === "download") {
       const label = document.createElement("span"); label.className = "qprompt";
-      const file = j.download_file || "(starting)";
       // PR-02-D04: when this job doesn't own the progress slot, surface
       // a "waiting" affordance instead of progress text and suppress the bar.
       const waiting = j.progress_owner === false;
       const counter = waiting ? "waiting for slot…" : fmtDownloadCounter(j);
-      label.textContent = counter
-        ? `${j.model}  ·  ${file}  ·  ${counter}`
-        : `${j.model}  ·  ${file}`;
+      // Only show the per-file segment when we're actually transferring
+      // bytes — cache-only loads never set download_file, so "(starting)"
+      // would just be filler that looks like a stuck download.
+      const showFile = dlPhase === "downloading";
+      const file = showFile ? (j.download_file || "(starting)") : "";
+      const parts = [j.model];
+      if (file) parts.push(file);
+      if (counter) parts.push(counter);
+      label.textContent = parts.join("  ·  ");
       label.title = label.textContent;
       li.appendChild(label);
       if (!waiting && j.download_files_done > 0) {
@@ -353,6 +388,17 @@ function renderQueue() {
       details.title = "show error message";
       details.onclick = () => showJobError(j);
       li.appendChild(details);
+    }
+    // Wall-clock duration for finished jobs. Uses ts_queued as start since
+    // download jobs skip the queued state and generate jobs spend at most a
+    // tick in it before the executor picks them up.
+    const finished = j.status === "done" || j.status === "error" || j.status === "canceled";
+    if (finished && j.ts_done && j.ts_queued) {
+      const dur = document.createElement("span");
+      dur.className = "qduration";
+      dur.textContent = fmtDuration(j.ts_done - j.ts_queued);
+      dur.title = "elapsed time";
+      li.appendChild(dur);
     }
     root.appendChild(li);
   }

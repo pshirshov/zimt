@@ -224,8 +224,10 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
                 log.append(msg)
                 await emit_log(msg, level="error")
                 continue
-            log.append(f"loading model: {name}")
-            await emit_log(f"loading model: {name}")
+            # No "loading model: {name}" emit_log here — load_model() broadcasts
+            # `model_loading`, which the UI renders as "loading {name}…" in the
+            # log row. Emitting here too would produce two near-identical lines
+            # for what is, from the user's perspective, a single event.
             try:
                 await load_model(name)
             except ModelLoadError as e:

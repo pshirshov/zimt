@@ -106,6 +106,8 @@ function loadApp(overrides = {}) {
     },
     buildRestorePromptLine() { return ""; },
     neighborInOutputs() { return null; },
+    renderPromptHTML() { return ""; },
+    unclosedVarOpenIndex() { return -1; },
     tokenAtCursor() { return { start: 0, end: 0, text: "" }; },
     completionItems() { return []; },
     promptArrowAction() { return "native"; },

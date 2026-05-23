@@ -44,6 +44,38 @@
     return { start, end, text: value.slice(start, end) };
   }
 
+  // Returns the offset of the most recent unclosed `${` in `textBefore`,
+  // or -1 if the cursor isn't in a variable-name position. "Unclosed"
+  // means no matching `}` AND no `=` between the `${` and the cursor —
+  // i.e. we're still in the name part of a ${name=...} or ${name}.
+  function unclosedVarOpenIndex(textBefore) {
+    for (let i = textBefore.length - 1; i >= 0; i -= 1) {
+      const c = textBefore[i];
+      if (c === "}" || c === "=") return -1;  // closed or past the name
+      if (c === "{" && i > 0 && textBefore[i - 1] === "$") return i - 1;
+    }
+    return -1;
+  }
+
+  // All variable names defined earlier in `text` via `${name=...}`. We
+  // use a regex sweep rather than a full parser since highlighter speed
+  // matters more than perfect handling of pathological escape patterns
+  // — and any name typed inside a comment would also be inside `<!-- -->`
+  // and thus irrelevant to the user's completion anyway.
+  function definedVarNames(text) {
+    const names = [];
+    const seen = new Set();
+    const re = /\$\{([A-Za-z_][A-Za-z0-9_]*)\s*=/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (!seen.has(m[1])) {
+        seen.add(m[1]);
+        names.push(m[1]);
+      }
+    }
+    return names;
+  }
+
   function tokensBefore(value, end) {
     return value.slice(0, end).split(/\s+/).filter(Boolean);
   }
@@ -65,6 +97,21 @@
     const before = tokensBefore(value, tokStart);
     const prev = before.length ? before[before.length - 1] : "";
     const lower = tokText.toLowerCase();
+
+    // Variable-name completion. We rely on the caller (updateSuggest in
+    // app.js) to have already shifted tokStart to point at the `$` of an
+    // unclosed `${...` — so when tokText starts with `${`, the user is
+    // typing inside a variable head. Accepted labels include the closing
+    // brace, so picking one doesn't leave the editor with an unclosed
+    // var. Only definitions BEFORE this `${` are offered; forward refs
+    // would raise at expansion time, so suggesting them would mislead.
+    if (tokText.startsWith("${")) {
+      const namePart = tokText.slice(2).toLowerCase();
+      const defs = definedVarNames(value.slice(0, tokStart));
+      return defs
+        .filter((n) => n.toLowerCase().startsWith(namePart))
+        .map((n) => ({ label: `\${${n}}`, desc: "variable" }));
+    }
 
     if (prev === "/model") {
       const models = appState?.models ?? [];
@@ -148,7 +195,12 @@
 
   root.tokenAtCursor = tokenAtCursor;
   root.completionItems = completionItems;
+  root.unclosedVarOpenIndex = unclosedVarOpenIndex;
+  root.definedVarNames = definedVarNames;
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { COMMANDS, COMMAND_HELP, tokenAtCursor, completionItems };
+    module.exports = {
+      COMMANDS, COMMAND_HELP, tokenAtCursor, completionItems,
+      unclosedVarOpenIndex, definedVarNames,
+    };
   }
 })(typeof globalThis !== "undefined" ? globalThis : window);

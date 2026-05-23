@@ -145,10 +145,12 @@ function loadApp() {
       }
     },
     buildRestorePromptLine() { return ""; },
-    // Provided by modal_nav.js in production. The harness only loads
-    // app.js, so we stub the helper here. Tests that need real
-    // navigation behaviour cover it in modal_nav.test.js directly.
+    // Provided by modal_nav.js / prompt_highlight.js / completion.js
+    // in production. The harness only runs app.js, so we stub these as
+    // no-ops; their real behaviour is covered by their own *.test.js.
     neighborInOutputs() { return null; },
+    renderPromptHTML() { return ""; },
+    unclosedVarOpenIndex() { return -1; },
     tokenAtCursor() { return { start: 0, end: 0, text: "" }; },
     completionItems() { return []; },
     promptArrowAction() { return "native"; },

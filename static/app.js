@@ -699,83 +699,14 @@ input.addEventListener("scroll", () => { highlight.scrollTop = input.scrollTop; 
 window.addEventListener("resize", autoResize);
 
 // ---------- prompt syntax highlighting ----------
-// Command → arg-spec: {n: fixedN, greedy: true|false}
-const HL_CMDS = {
-  "/help": {n: 0}, "/?": {n: 0}, "/quit": {n: 0}, "/exit": {n: 0}, "/q": {n: 0},
-  "/raw": {n: 0},
-  "/model": {n: 1, cls: "hl-model"},
-  "/lora": {n: 1, cls: "hl-lora"},
-  "/sampler": {n: 1, cls: "hl-sampler"},
-  "/cfg": {n: 1, cls: "hl-num"},
-  "/steps": {n: 1, cls: "hl-num"},
-  "/seed": {n: 1, cls: "hl-num"},
-  "/clip_skip": {n: 1, cls: "hl-num"},
-  "/res": {n: 1, cls: "hl-num"},
-  "/size": {n: 2, cls: "hl-num"},
-  "/many": {n: 1, cls: "hl-num", thenGreedy: true},
-  "/negprompt": {greedy: true, cls: "hl-neg"},
-  "/tokenize": {greedy: true},
-  // /mem accepts ``off | max <size> | cpuoffload | cpuoffload-seq``. Both
-  // the mode keyword and the optional size are arg-like flags — colour
-  // them with hl-flag so the whole ``/mem <mode> [size]`` reads as one
-  // composite at a glance. Greedy matches the Python parser's GREEDY
-  // arity so a following ``/cmd`` correctly closes the run.
-  "/mem": {greedy: true, cls: "hl-flag"},
-};
-
+// The tokenizer + renderer lives in static/prompt_highlight.js so it can
+// be unit-tested without a DOM. It also owns the HL_CMDS table since
+// command-to-class mapping is part of the same concern.
 function esc(s) {
   return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 }
-
 function renderHighlight() {
-  const text = input.value;
-  if (text === "") { highlight.innerHTML = "&nbsp;"; return; }
-  // Tokenize keeping whitespace so the rendered string preserves the user's
-  // exact formatting and the caret aligns with what they typed.
-  const parts = text.split(/(\s+)/);
-  let out = "";
-  let argsLeft = 0;
-  let argClass = "";
-  let greedyClass = null;
-  for (const p of parts) {
-    if (/^\s+$/.test(p)) { out += p; continue; }
-    if (p === "") continue;
-    if (p in HL_CMDS) {
-      const spec = HL_CMDS[p];
-      out += `<span class="hl-cmd">${esc(p)}</span>`;
-      if (spec.greedy) {
-        greedyClass = spec.cls || "";
-        argsLeft = 0;
-      } else {
-        argsLeft = spec.n;
-        argClass = spec.cls || "";
-        if (spec.thenGreedy) {
-          // /many: N is one arg, then prompt is free-form (no highlight).
-          // We render N as num, then drop out of arg mode.
-        }
-      }
-      continue;
-    }
-    // Token that *looks* like a command but isn't recognised.
-    if (p.startsWith("/")) {
-      out += `<span class="hl-unknown-cmd">${esc(p)}</span>`;
-      continue;
-    }
-    if (greedyClass !== null) {
-      out += greedyClass ? `<span class="${greedyClass}">${esc(p)}</span>` : esc(p);
-      continue;
-    }
-    if (argsLeft > 0) {
-      out += argClass ? `<span class="${argClass}">${esc(p)}</span>` : esc(p);
-      argsLeft -= 1;
-      continue;
-    }
-    // Free-form prompt text — default colour.
-    out += esc(p);
-  }
-  // Trailing newline guards against the browser collapsing the final line.
-  if (text.endsWith("\n")) out += "\n";
-  highlight.innerHTML = out;
+  highlight.innerHTML = renderPromptHTML(input.value);
 }
 
 // ---------- intellisense-style suggestion popup ----------
@@ -866,7 +797,16 @@ function renderSuggest() {
 function updateSuggest() {
   const value = input.value;
   const cursor = input.selectionStart;
-  const tok = tokenAtCursor(value, cursor);
+  let tok = tokenAtCursor(value, cursor);
+  // If the cursor sits inside an unclosed `${...`, narrow the "current
+  // token" to start at the `$` rather than the previous whitespace —
+  // otherwise accepting a variable suggestion would clobber the literal
+  // text before `${`. Example: typing `world${c<Tab>` should yield
+  // `world${color}`, not `${color}` with `world` deleted.
+  const varOpen = unclosedVarOpenIndex(value.slice(0, cursor));
+  if (varOpen >= 0) {
+    tok = { start: varOpen, end: cursor, text: value.slice(varOpen, cursor) };
+  }
   const items = completionItems(value, tok.start, tok.text, state);
   if (!items.length) {
     suggest = { visible: false, items: [], selected: 0,

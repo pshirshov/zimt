@@ -150,6 +150,16 @@
   .hl-flag { color: var(--accent); }
   .hl-neg { color: #c77; }
   .hl-unknown-cmd { color: var(--error); text-decoration: underline wavy; }
+  /* Template syntax. Braces `{ | }` for alternation in cool blue;
+     variables `${name=...}` in warm amber so the two systems are
+     visually distinct at a glance. Comments + escapes dim down so
+     they don't compete with the prompt body. */
+  .hl-brace { color: #88c0d0; font-weight: 600; }
+  .hl-var { color: #d19a66; font-weight: 600; }
+  .hl-var-name { color: #f9b18b; }
+  .hl-var-eq { color: #d19a66; }
+  .hl-comment { color: #6a737d; font-style: italic; }
+  .hl-escape { color: #8b949e; }
 
   /* GPU stats pill sits on the right edge of the topbar. */
   .gpu-pill { margin-left: auto; font-family: ui-monospace, monospace;

@@ -8,6 +8,7 @@ from typing import Any
 import torch
 
 from ..buckets import parse_res
+from ..dynamics import DynamicsSyntaxError, validate as validate_dynamics
 from ..generate import GenConfig, generate, load_spec, unload
 from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
 from ..memory import DEFAULT as DEFAULT_MEM, MemArgError, MemStrategy, parse_mem_args
@@ -36,6 +37,14 @@ def _help() -> None:
     print("  /tokenize <text>     show per-encoder tokenization heuristics")
     print("  /mem [mode [arg]]    set memory strategy; bare shows current.")
     print("                       modes: off | max <size> | cpuoffload | cpuoffload-seq")
+    print("prompt syntax (expanded before encoding, deterministic per seed):")
+    print("  {a|b|c}              alternation — pick one")
+    print("  {2::a|1::b}          weighted alternation (2/3 a, 1/3 b)")
+    print("  {a {b|c}|d}          nesting; {|a} means 'maybe a, maybe nothing'")
+    print("  ${c=red|green|blue}  bind variable (silent); pick once per seed")
+    print("  ${c}                 reference the bound value (reuse the pick)")
+    print("  \\{ \\| \\$              escape for literal braces / pipe / dollar")
+    print("  <!-- foo -->         comment, stripped before encoding")
     print("  /help                show this")
     print("  /quit | /exit | ^D   leave")
     print("note: negative prompt is only consulted when cfg > 0.")
@@ -236,6 +245,13 @@ def repl_main() -> int:
         if not prompt_text:
             continue
         if not _require_pipe(pipe) or g is None:
+            continue
+        # Catch template syntax errors once, before the /many loop, so a
+        # broken `{red|blue` doesn't print N near-identical errors.
+        try:
+            validate_dynamics(prompt_text)
+        except DynamicsSyntaxError as e:
+            print(f"template error: {e}")
             continue
         for i in range(max(1, count)):
             seed = (next_seed + i) if next_seed is not None else random.randint(0, 2**31 - 1)

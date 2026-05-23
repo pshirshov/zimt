@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from ..buckets import parse_res
+from ..dynamics import DynamicsSyntaxError, validate as validate_dynamics
 from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
 from ..memory import MemArgError, parse_mem_args
 from ..models.registry import MODELS
@@ -198,6 +199,12 @@ _HELP_LINES = [
     "  /tokenize <text>       show per-encoder token analysis",
     "  /mem [mode [arg]]      memory strategy; bare shows current",
     "                         modes: off | max <size> | cpuoffload | cpuoffload-seq",
+    "prompt syntax (deterministic per seed):",
+    "  {a|b|c}                alternation; supports nesting & {|a} for empty",
+    "  {2::a|1::b}            weighted alternation",
+    "  ${c=red|green|blue}    bind variable (silent); ${c} references it",
+    "  \\{ \\| \\$                escape for literal braces / pipe / dollar",
+    "  <!-- foo -->           comment, stripped before encoding",
     "multiple commands may be combined on one line, e.g.",
     "  /model pony-v6-xl /cfg 5 /steps 25 cute anime girl",
 ]
@@ -353,6 +360,16 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
         return {"job_ids": job_ids, "log": log}
     if STATE.pipe is None or STATE.g is None:
         msg = "generate: no model loaded"
+        log.append(msg)
+        await emit_log(msg, level="error")
+        return {"job_ids": job_ids, "log": log}
+    # Validate template syntax once, before enqueuing any /many batch.
+    # Without this a `/many 8 {red|blue` would enqueue 8 jobs that all
+    # die in run_job with the same syntax error.
+    try:
+        validate_dynamics(prompt_text)
+    except DynamicsSyntaxError as e:
+        msg = f"template: {e}"
         log.append(msg)
         await emit_log(msg, level="error")
         return {"job_ids": job_ids, "log": log}

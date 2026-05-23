@@ -1349,7 +1349,7 @@ class NonSdxlLoraTests(unittest.TestCase):
 
         g = _config_for("z-image-turbo")  # family="zimage"
         g.lora_stack = [("pixel-art-xl", 0.8)]
-        info = _pnginfo(g, "prompt", "prompt", 42)
+        info = _pnginfo(g, "prompt", "prompt", "prompt", 42)
         # PngInfo exposes the text chunks via .chunks (a list of tuples).
         # Extract the keyword of every tEXt/iTXt/zTXt chunk.
         keywords: set[str] = set()
@@ -1370,7 +1370,7 @@ class NonSdxlLoraTests(unittest.TestCase):
 
         g = _config_for("pony-v6-xl")  # family="sdxl"
         g.lora_stack = [("pixel-art-xl", 0.8)]
-        info = _pnginfo(g, "prompt", "prompt", 42)
+        info = _pnginfo(g, "prompt", "prompt", "prompt", 42)
         keywords: set[str] = set()
         for chunk_type, data, *_ in info.chunks:
             if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):

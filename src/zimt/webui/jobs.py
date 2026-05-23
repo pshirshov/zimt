@@ -15,12 +15,15 @@ import os
 from datetime import datetime
 from typing import Any
 
+import random as _random
+
+from ..dynamics import DynamicsSyntaxError, expand, has_dynamics
 from ..generate import CancelledByUser, UninstalledLoraError, generate
 from ..generate import GenConfig
 from ..paths import OUT_DIR
 from .outputs import read_png_meta
 from .state import CANCEL_EVENTS, EXECUTOR, Job, PIPE_LOCK, STATE
-from .ws import broadcast, emit_job
+from .ws import broadcast, emit_job, emit_log
 
 
 def _run_generate_sync(job: Job, pipe: Any, g: GenConfig,
@@ -45,6 +48,26 @@ def _run_generate_sync(job: Job, pipe: Any, g: GenConfig,
 async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool,
                   g: GenConfig) -> None:
     """Acquire the pipeline lock, run one generation, broadcast events."""
+    # Pre-expand the template (if any) BEFORE acquiring PIPE_LOCK so a
+    # syntax error surfaces immediately and so the WS log can show both
+    # the original template and the resolved text. The same seed +
+    # text yields the same expansion inside generate() — that re-run
+    # is the one that actually feeds the encoder, the call here only
+    # exists to drive the UI log and report syntax errors early.
+    if has_dynamics(raw_prompt):
+        try:
+            expanded = expand(raw_prompt, _random.Random(seed))
+        except DynamicsSyntaxError as e:
+            job.status = "error"
+            job.error = f"template: {e}"
+            job.ts_done = datetime.now().timestamp()
+            CANCEL_EVENTS.pop(job.id, None)
+            await emit_log(f"template: {e}", level="error")
+            await emit_job(job)
+            return
+        if expanded != raw_prompt:
+            await emit_log(f"template: {raw_prompt!r} → {expanded!r}")
+
     async with PIPE_LOCK:
         ev = CANCEL_EVENTS.get(job.id)
         if ev is not None and ev.is_set():

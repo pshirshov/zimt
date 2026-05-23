@@ -11,6 +11,7 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,6 +24,7 @@ from PIL.PngImagePlugin import PngInfo
 
 from . import ansi
 from .device import DEVICE
+from .dynamics import DynamicsSyntaxError, expand, has_dynamics
 from .memory import MemStrategy
 from .models.loras import LORAS
 from .models.spec import ModelSpec
@@ -83,11 +85,24 @@ def compose_prompt(spec: ModelSpec, raw_prompt: str, *, raw: bool) -> str:
     return f"{spec.score_tags}, {raw_prompt}"
 
 
-def _pnginfo(g: GenConfig, full_prompt: str, raw_prompt: str, seed: int) -> PngInfo:
+def _pnginfo(
+    g: GenConfig,
+    full_prompt: str,
+    raw_prompt: str,
+    expanded_prompt: str,
+    seed: int,
+) -> PngInfo:
     """Build the PNG tEXt chunks recorded with every saved image.
 
     Readable by PIL (``Image.open(...).info``), exiftool, or
     ``identify -verbose``.
+
+    ``raw_prompt`` is what the user typed (may contain ``{a|b}`` syntax).
+    ``expanded_prompt`` is the post-template-expansion text actually fed
+    to ``compose_prompt``. Recorded as a distinct field only when it
+    differs from ``raw_prompt`` — that way images generated from plain
+    prompts have unchanged PNG schema, and template users can recover
+    both the original and the resolved text from the file.
     """
     info = PngInfo()
     info.add_text("model", g.spec.name)
@@ -95,6 +110,8 @@ def _pnginfo(g: GenConfig, full_prompt: str, raw_prompt: str, seed: int) -> PngI
         info.add_text("repo_id", g.spec.repo_id)
         info.add_text("repo_url", f"https://huggingface.co/{g.spec.repo_id}")
     info.add_text("raw_prompt", raw_prompt)
+    if expanded_prompt != raw_prompt:
+        info.add_text("expanded_prompt", expanded_prompt)
     info.add_text("prompt", full_prompt)
     info.add_text("negative_prompt", g.negative_prompt or "")
     info.add_text("seed", str(seed))
@@ -238,9 +255,19 @@ def generate(
     :class:`CancelledByUser`) to abort; the exception propagates out so the
     caller can mark the run.
     """
-    full_prompt = compose_prompt(g.spec, raw_prompt, raw=raw)
+    # Dynamic-prompt expansion happens here — once the seed is known and
+    # before compose_prompt prepends any model score-tag prefix. That
+    # ordering matters: score_tags must never be template-expanded by
+    # accident, and the same seed must always yield the same expansion.
+    expanded_prompt = raw_prompt
+    if has_dynamics(raw_prompt):
+        expanded_prompt = expand(raw_prompt, random.Random(seed))
+
+    full_prompt = compose_prompt(g.spec, expanded_prompt, raw=raw)
     neg = g.negative_prompt if g.cfg > 0 else None
 
+    if expanded_prompt != raw_prompt:
+        print(f"{ansi.DIM}template:{ansi.RESET} {raw_prompt!r}")
     print(f"{ansi.DIM}positive:{ansi.RESET} {full_prompt!r}")
     print(f"{ansi.DIM}negative:{ansi.RESET} {neg!r}")
 
@@ -290,7 +317,10 @@ def generate(
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     out = os.path.join(OUT_DIR, f"{ts}-{g.spec.name}-seed{seed}.png")
-    image.save(out, pnginfo=_pnginfo(g, full_prompt, raw_prompt, seed))
+    image.save(
+        out,
+        pnginfo=_pnginfo(g, full_prompt, raw_prompt, expanded_prompt, seed),
+    )
     print(f"generated in {dt:.1f}s -> {out}")
     return out
 

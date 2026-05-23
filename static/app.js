@@ -651,6 +651,12 @@ const HL_CMDS = {
   "/many": {n: 1, cls: "hl-num", thenGreedy: true},
   "/negprompt": {greedy: true, cls: "hl-neg"},
   "/tokenize": {greedy: true},
+  // /mem accepts ``off | max <size> | cpuoffload | cpuoffload-seq``. Both
+  // the mode keyword and the optional size are arg-like flags — colour
+  // them with hl-flag so the whole ``/mem <mode> [size]`` reads as one
+  // composite at a glance. Greedy matches the Python parser's GREEDY
+  // arity so a following ``/cmd`` correctly closes the run.
+  "/mem": {greedy: true, cls: "hl-flag"},
 };
 
 function esc(s) {

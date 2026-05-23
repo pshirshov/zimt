@@ -57,6 +57,25 @@
     return -1;
   }
 
+  // Returns the natural end of a `${name...` reference scanning forward
+  // from `cursor`. Stops at the first non-name character — including the
+  // closing `}` (which is INCLUDED in the return, i.e. the position just
+  // after it). Used by the completion harness to set the replacement
+  // range so that clicking a suggestion while the cursor sits IN the
+  // middle of an existing `${clothesA}` reference replaces the entire
+  // reference rather than leaving a `thesA}` suffix behind.
+  function naturalVarEnd(text, cursor) {
+    for (let i = cursor; i < text.length; i += 1) {
+      const c = text[i];
+      if (c === "}") return i + 1;
+      // Any char that can't be part of a name terminates the var,
+      // exclusive — whitespace, `=`, opening braces, etc. stay where
+      // they are; we don't swallow them into the replacement range.
+      if (!/[A-Za-z0-9_.]/.test(c)) return i;
+    }
+    return text.length;
+  }
+
   // All variable names defined earlier in `text`, including:
   //   * scalar defs:        ${name=...}
   //   * flat-dotted defs:   ${a.b.c=...}
@@ -278,11 +297,12 @@
   root.tokenAtCursor = tokenAtCursor;
   root.completionItems = completionItems;
   root.unclosedVarOpenIndex = unclosedVarOpenIndex;
+  root.naturalVarEnd = naturalVarEnd;
   root.definedVarNames = definedVarNames;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       COMMANDS, COMMAND_HELP, tokenAtCursor, completionItems,
-      unclosedVarOpenIndex, definedVarNames,
+      unclosedVarOpenIndex, naturalVarEnd, definedVarNames,
     };
   }
 })(typeof globalThis !== "undefined" ? globalThis : window);

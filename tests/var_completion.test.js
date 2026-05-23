@@ -4,8 +4,41 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   tokenAtCursor, completionItems,
-  unclosedVarOpenIndex, definedVarNames,
+  unclosedVarOpenIndex, naturalVarEnd, definedVarNames,
 } = require("../static/completion.js");
+
+test("naturalVarEnd extends past the closing } for a fully-closed reference", () => {
+  // Regression: previously the click-in-middle of `${clothesA}` only
+  // replaced from `$` to the cursor, leaving `thesA}` behind. The fix
+  // sets the replacement range's end past the closing brace.
+  const text = "${clothesA}";
+  // cursor mid-name (between 'o' and 't' of "clothes")
+  assert.equal(naturalVarEnd(text, 5), 11);
+});
+
+test("naturalVarEnd returns cursor when no closing brace exists yet", () => {
+  // Still typing — no `}` ahead, no boundary. The replacement range
+  // ends at the cursor (nothing past it to preserve).
+  assert.equal(naturalVarEnd("${clo", 5), 5);
+});
+
+test("naturalVarEnd stops at whitespace if no } intervenes", () => {
+  // User typed `${clothes hair` without a closing `}` — replacement
+  // should cover only `${clothes`, not extend into ` hair`.
+  assert.equal(naturalVarEnd("${clothes hair", 5), 9);
+});
+
+test("naturalVarEnd stops at a new ${ if no } intervenes", () => {
+  // Adjacent vars: `${a${b}` — first ref's natural end is just before
+  // the second `${`.
+  assert.equal(naturalVarEnd("${a${b}", 3), 3);
+});
+
+test("naturalVarEnd accepts dots in the name (dotted refs)", () => {
+  // `${person.hair}` — the `.` is a name character, scan continues
+  // through it and lands on the `}`.
+  assert.equal(naturalVarEnd("${person.hair}", 5), 14);
+});
 
 test("unclosedVarOpenIndex finds the most recent unclosed ${", () => {
   // Standard case: ${ open, no = yet.

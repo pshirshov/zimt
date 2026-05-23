@@ -259,7 +259,13 @@ def repl_main() -> int:
             seed = (next_seed + i) if next_seed is not None else random.randint(0, 2**31 - 1)
             print(f"seed={seed}")
             try:
-                out = generate(pipe, g, prompt_text, seed, raw=raw_flag)
+                # `line` here is the raw input from the REPL prompt —
+                # recorded in PNG metadata as command_line so the image
+                # can round-trip back to its source line.
+                out = generate(
+                    pipe, g, prompt_text, seed, raw=raw_flag,
+                    command_line=line,
+                )
             except Exception as e:
                 print(f"error: {e}")
                 continue

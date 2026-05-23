@@ -91,24 +91,30 @@ def _pnginfo(
     raw_prompt: str,
     expanded_prompt: str,
     seed: int,
+    command_line: str = "",
 ) -> PngInfo:
     """Build the PNG tEXt chunks recorded with every saved image.
 
     Readable by PIL (``Image.open(...).info``), exiftool, or
     ``identify -verbose``.
 
-    ``raw_prompt`` is what the user typed (may contain ``{a|b}`` syntax).
-    ``expanded_prompt`` is the post-template-expansion text actually fed
-    to ``compose_prompt``. Recorded as a distinct field only when it
-    differs from ``raw_prompt`` — that way images generated from plain
-    prompts have unchanged PNG schema, and template users can recover
-    both the original and the resolved text from the file.
+    ``raw_prompt`` is what the user typed for the prompt portion (may
+    contain ``{a|b}`` template syntax). ``expanded_prompt`` is the
+    post-template-expansion text actually fed to ``compose_prompt`` —
+    recorded as a distinct field only when it differs from
+    ``raw_prompt``. ``command_line`` is the FULL untouched line the
+    user submitted, including any ``/cmd`` parts (same value the web UI
+    stores in its "recent prompts" list). Recorded as ``command_line``
+    so a future generation can round-trip exactly what was typed,
+    /commands and template syntax included.
     """
     info = PngInfo()
     info.add_text("model", g.spec.name)
     if g.spec.repo_id:
         info.add_text("repo_id", g.spec.repo_id)
         info.add_text("repo_url", f"https://huggingface.co/{g.spec.repo_id}")
+    if command_line:
+        info.add_text("command_line", command_line)
     info.add_text("raw_prompt", raw_prompt)
     if expanded_prompt != raw_prompt:
         info.add_text("expanded_prompt", expanded_prompt)
@@ -246,6 +252,7 @@ def generate(
     *,
     raw: bool,
     on_step: Callable[[int, int], None] | None = None,
+    command_line: str = "",
 ) -> str:
     """Run a single generation, save the PNG, return its path.
 
@@ -254,6 +261,12 @@ def generate(
     ``callback_on_step_end`` hook. It may raise (typically
     :class:`CancelledByUser`) to abort; the exception propagates out so the
     caller can mark the run.
+
+    ``command_line``, if non-empty, is the full untouched user input
+    (including any ``/cmd`` parts and template syntax) — recorded into
+    the PNG metadata so the image can round-trip back to its source
+    line. Defaults to ``""`` so older callers that don't have a line
+    handy keep working.
     """
     # Dynamic-prompt expansion happens here — once the seed is known and
     # before compose_prompt prepends any model score-tag prefix. That
@@ -319,7 +332,9 @@ def generate(
     out = os.path.join(OUT_DIR, f"{ts}-{g.spec.name}-seed{seed}.png")
     image.save(
         out,
-        pnginfo=_pnginfo(g, full_prompt, raw_prompt, expanded_prompt, seed),
+        pnginfo=_pnginfo(
+            g, full_prompt, raw_prompt, expanded_prompt, seed, command_line,
+        ),
     )
     print(f"generated in {dt:.1f}s -> {out}")
     return out

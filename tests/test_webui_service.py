@@ -127,6 +127,7 @@ class ExecValidationTests(StateCase):
 
         async def fake_run_job(
             _job: Job, _raw_prompt: str, _seed: int, _raw: bool, g: GenConfig,
+            **_kwargs: object,
         ) -> None:
             captured.append(g)
 
@@ -1095,6 +1096,7 @@ class LoraSnapshotTests(StateCase):
 
         async def fake_run_job(
             _job: Job, _raw_prompt: str, _seed: int, _raw: bool, g: GenConfig,
+            **_kwargs: object,
         ) -> None:
             captured.append(g)
 
@@ -1377,6 +1379,39 @@ class NonSdxlLoraTests(unittest.TestCase):
                 keyword = data.split(b"\x00", 1)[0].decode("latin-1", "replace")
                 keywords.add(keyword)
         self.assertIn("loras", keywords)
+
+    def test_pnginfo_records_command_line_when_supplied(self) -> None:
+        # The full user input (incl. /cmd parts and template syntax)
+        # round-trips into the PNG as a `command_line` tEXt chunk. Empty
+        # command_line omits the field entirely so old call sites that
+        # don't pass one keep their unchanged metadata schema.
+        from zimt.generate import _pnginfo
+
+        g = _config_for("pony-v6-xl")
+        line = "/model pony-v6-xl /cfg 5 cute ${color=red|blue} cat"
+        info = _pnginfo(g, "prompt", "prompt", "prompt", 42, line)
+        chunks_by_key: dict[str, str] = {}
+        for chunk_type, data, *_ in info.chunks:
+            if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
+                key, _, value = data.partition(b"\x00")
+                chunks_by_key[key.decode("latin-1", "replace")] = (
+                    value.decode("latin-1", "replace")
+                )
+        self.assertEqual(chunks_by_key.get("command_line"), line)
+
+    def test_pnginfo_omits_command_line_when_empty(self) -> None:
+        # Default-empty command_line must not emit the field — otherwise
+        # old callers that don't supply one would gain a stray empty
+        # tEXt chunk.
+        from zimt.generate import _pnginfo
+
+        g = _config_for("pony-v6-xl")
+        info = _pnginfo(g, "prompt", "prompt", "prompt", 42)
+        keywords: set[str] = set()
+        for chunk_type, data, *_ in info.chunks:
+            if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
+                keywords.add(data.split(b"\x00", 1)[0].decode("latin-1", "replace"))
+        self.assertNotIn("command_line", keywords)
 
     def test_apply_lora_stack_warns_when_non_sdxl_has_loras(self) -> None:
         # PR-07-D14 (layer 2): _apply_lora_stack must emit a warning (not

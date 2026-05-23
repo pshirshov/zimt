@@ -393,5 +393,8 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
         CANCEL_EVENTS[job.id] = threading.Event()
         job_ids.append(job.id)
         await emit_job(job)
-        register_task(run_job(job, prompt_text, seed, raw_flag, g_snapshot))
+        register_task(run_job(
+            job, prompt_text, seed, raw_flag, g_snapshot,
+            command_line=body.line,
+        ))
     return {"job_ids": job_ids, "log": log}

@@ -151,6 +151,7 @@ function loadApp() {
     neighborInOutputs() { return null; },
     renderPromptHTML() { return ""; },
     unclosedVarOpenIndex() { return -1; },
+    naturalVarEnd(text, cursor) { return cursor; },
     tokenAtCursor() { return { start: 0, end: 0, text: "" }; },
     completionItems() { return []; },
     promptArrowAction() { return "native"; },

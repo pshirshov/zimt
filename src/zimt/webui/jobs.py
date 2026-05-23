@@ -28,7 +28,8 @@ from .ws import broadcast, emit_job, emit_log
 
 def _run_generate_sync(job: Job, pipe: Any, g: GenConfig,
                        raw_prompt: str, seed: int, raw: bool,
-                       loop: asyncio.AbstractEventLoop) -> str:
+                       loop: asyncio.AbstractEventLoop,
+                       command_line: str) -> str:
     """Worker-thread entry. Builds the cancel/progress callback then dispatches."""
     ev = CANCEL_EVENTS.get(job.id)
 
@@ -42,11 +43,12 @@ def _run_generate_sync(job: Job, pipe: Any, g: GenConfig,
 
     return generate(
         pipe, g, raw_prompt, seed, raw=raw, on_step=_on_step,
+        command_line=command_line,
     )
 
 
 async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool,
-                  g: GenConfig) -> None:
+                  g: GenConfig, command_line: str = "") -> None:
     """Acquire the pipeline lock, run one generation, broadcast events."""
     # Pre-expand the template (if any) BEFORE acquiring PIPE_LOCK so a
     # syntax error surfaces immediately and so the WS log can show both
@@ -104,7 +106,8 @@ async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool,
         try:
             loop = asyncio.get_running_loop()
             path = await loop.run_in_executor(
-                EXECUTOR, _run_generate_sync, job, pipe, g, raw_prompt, seed, raw, loop,
+                EXECUTOR, _run_generate_sync,
+                job, pipe, g, raw_prompt, seed, raw, loop, command_line,
             )
         except CancelledByUser:
             job.status = "canceled"

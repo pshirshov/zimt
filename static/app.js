@@ -582,7 +582,12 @@ function openModal(entry) {
   // user looking at a template-generated image sees both the typed
   // template and the resolved text at a glance.
   const grid = $("modal-meta"); grid.innerHTML = "";
+  // command_line is the original user input (with all /cmd parts and
+  // template syntax intact) — shown first so a glance at the modal
+  // reveals exactly what was typed. The decomposed fields below stay
+  // for backward compat and quick parameter inspection.
   const keys = ["model", "repo_id", "repo_url",
+                "command_line",
                 "raw_prompt", "expanded_prompt", "prompt",
                 "negative_prompt", "seed",
                 "steps", "cfg", "sampler", "clip_skip", "loras",
@@ -799,13 +804,20 @@ function updateSuggest() {
   const cursor = input.selectionStart;
   let tok = tokenAtCursor(value, cursor);
   // If the cursor sits inside an unclosed `${...`, narrow the "current
-  // token" to start at the `$` rather than the previous whitespace —
-  // otherwise accepting a variable suggestion would clobber the literal
-  // text before `${`. Example: typing `world${c<Tab>` should yield
-  // `world${color}`, not `${color}` with `world` deleted.
+  // token" to the variable head — start at the `$`, end past the
+  // matching `}` (if any). The replacement range covers the WHOLE
+  // existing reference so clicking a suggestion on `${clothesA}` with
+  // the cursor mid-name swaps the entire reference for `${clothesB}`,
+  // not just from the `$` to the cursor (which would leave a `thesA}`
+  // suffix). `tok.text` still ends at the cursor — that's the typed
+  // prefix used to filter the completion list.
   const varOpen = unclosedVarOpenIndex(value.slice(0, cursor));
   if (varOpen >= 0) {
-    tok = { start: varOpen, end: cursor, text: value.slice(varOpen, cursor) };
+    tok = {
+      start: varOpen,
+      end: naturalVarEnd(value, cursor),
+      text: value.slice(varOpen, cursor),
+    };
   }
   const items = completionItems(value, tok.start, tok.text, state);
   if (!items.length) {
@@ -926,38 +938,36 @@ input.addEventListener("keydown", (e) => {
     hideSuggest();
     return;
   }
-  // Shift+Enter: submit but DON'T clear the textarea (iterate-friendly).
-  // Dismisses the popup as a side effect. Takes precedence over the
-  // other Enter handlers regardless of popup state.
+  // Enter-key key bindings:
+  //   * Shift+Enter   — queue (submit) but don't clear the textarea.
+  //                     Lets the user iterate on the same prompt.
+  //   * Ctrl+Enter    — queue (submit) and clear the textarea.
+  //                     The "I'm done with this prompt" gesture.
+  //   * Enter (popup) — accept the highlighted completion item.
+  //   * Enter (plain) — insert a newline, like a normal multi-line editor.
+  // Submit gestures take precedence over the popup-open accept so the
+  // user can always submit even with the popup showing.
   if (e.key === "Enter" && e.shiftKey && !e.ctrlKey) {
     e.preventDefault();
     hideSuggest();
     submit({ keepValue: true });
     return;
   }
-  // Ctrl+Enter: insert a newline (since Shift+Enter no longer does that).
   if (e.key === "Enter" && e.ctrlKey) {
-    // Let the textarea handle Enter normally — but Ctrl+Enter doesn't
-    // insert a newline by default either, so do it ourselves.
     e.preventDefault();
-    const c = input.selectionStart;
-    input.value = input.value.slice(0, c) + "\n" + input.value.slice(c);
-    input.setSelectionRange(c + 1, c + 1);
-    autoResize();
+    hideSuggest();
+    submit();
     return;
   }
-  // Enter while popup is open: accept the highlighted item (+ trailing space
-  // for /commands that take args) and dismiss the popup. The next Enter
-  // submits, unless the popup re-opened for the next-arg context.
   if (e.key === "Enter" && suggest.visible) {
     e.preventDefault();
     commitSuggest();
     return;
   }
-  // Enter (popup closed): submit + clear.
   if (e.key === "Enter") {
-    e.preventDefault();
-    submit();
+    // Plain Enter inserts a newline. Default textarea behaviour does
+    // exactly that, so don't preventDefault — let the browser handle
+    // it and then update the highlight/resize via the input event.
     return;
   }
   // Arrows behave like a normal multiline editor except at absolute text

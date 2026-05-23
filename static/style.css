@@ -351,9 +351,25 @@
   .modal-inner { max-width: 1500px; margin: 0 auto; background: var(--bg);
     border-radius: 6px; padding: 16px; display: flex; gap: 16px; }
   .modal-img-wrap { flex: 1 1 60%; min-width: 0; display: flex;
-    flex-direction: column; align-items: center; gap: 10px; }
+    flex-direction: column; align-items: center; gap: 10px;
+    position: relative; }
   .modal-img-wrap img { max-width: 100%; max-height: 86vh; object-fit: contain;
     background: #000; border-radius: 4px; }
+  /* Prev/next overlay arrows. Anchored to the wrap so they sit at the
+     edges of the image column even when the image's aspect ratio leaves
+     letterbox space above/below. Dim by default, brighter on hover.
+     Hidden via the `hidden` attribute when at a boundary — see app.js
+     updateModalNav(). */
+  .modal-nav { position: absolute; top: 50%; transform: translateY(-50%);
+    background: rgba(0, 0, 0, 0.55); color: #fff; border: none;
+    width: 44px; height: 64px; padding: 0;
+    font-size: 32px; line-height: 1; border-radius: 4px;
+    cursor: pointer; user-select: none; opacity: 0.7;
+    transition: opacity 0.12s, background 0.12s; }
+  .modal-nav:hover { opacity: 1; background: rgba(0, 0, 0, 0.78); }
+  .modal-nav-prev { left: 8px; }
+  .modal-nav-next { right: 8px; }
+  .modal-nav[hidden] { display: none; }
   .modal-side { flex: 0 0 380px; display: flex; flex-direction: column; gap: 10px; }
   .modal-actions { display: flex; gap: 6px; }
   .modal-actions button { padding: 6px 10px; }

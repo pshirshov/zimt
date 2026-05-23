@@ -118,6 +118,11 @@ function loadApp() {
         return null;
       },
       querySelectorAll() { return []; },
+      // app.js installs a document-level keydown listener for the
+      // modal prev/next/Esc shortcuts. The fake harness doesn't
+      // exercise that path, but the listener registration must not
+      // throw — so stub it as a no-op.
+      addEventListener() {},
     },
     window: {
       innerWidth: 1200,
@@ -140,6 +145,10 @@ function loadApp() {
       }
     },
     buildRestorePromptLine() { return ""; },
+    // Provided by modal_nav.js in production. The harness only loads
+    // app.js, so we stub the helper here. Tests that need real
+    // navigation behaviour cover it in modal_nav.test.js directly.
+    neighborInOutputs() { return null; },
     tokenAtCursor() { return { start: 0, end: 0, text: "" }; },
     completionItems() { return []; },
     promptArrowAction() { return "native"; },

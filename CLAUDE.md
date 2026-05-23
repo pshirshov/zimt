@@ -206,6 +206,25 @@ For new architectures, write a sibling module with
 add a `ModelSpec` entry. Every loader **must** accept `mem` — see
 `zimage.py` for the non-SDXL example.
 
+## Outputs gallery modal
+
+The image-preview modal in the web UI supports ←/→ + on-screen prev/next
+overlay buttons. Navigation uses the live `outputs` array — already
+filtered by the active tab (all/fav) — so it respects the user's filter
+implicitly without needing a separate "filter mode" argument.
+
+The pure neighbor lookup lives in `static/modal_nav.js`
+(`neighborInOutputs(outputs, currentName, direction)`) so it can be
+unit-tested without a DOM. The two test harnesses that `vm.runInNewContext`
+the bulk `static/app.js` (`tests/frontend_state.test.js`,
+`tests/model_download_state.test.js`) stub the helper as a no-op since
+they don't exercise the modal navigation path.
+
+Keyboard shortcuts are bound at `document` level but gated on
+`#modal.open` AND the active element NOT being an INPUT/TEXTAREA/
+contenteditable — so the prompt editor's arrow-key behaviour is
+unchanged when the modal is closed.
+
 ## Debugging
 
 - One-shot scripts go under `./debug/{YYYYMMDD-HHMMSS}-{name}.py`. They

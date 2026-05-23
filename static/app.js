@@ -437,6 +437,9 @@ function onFavoriteChanged(entry) {
 }
 function renderThumbs() {
   $("outputs-count").textContent = `${outputs.length}${hasMore ? "+" : ""} / ${totalCount}`;
+  // Keep modal prev/next in sync — if the active entry was removed
+  // (e.g. unfavorited while on the fav tab), the boundaries shift.
+  if ($("modal").classList.contains("open")) updateModalNav();
   const root = $("thumbs"); root.innerHTML = "";
   for (const e of outputs) {
     const d = document.createElement("div"); d.className = "thumb";
@@ -575,9 +578,13 @@ function updateModalFavButton() {
 function openModal(entry) {
   modalEntry = entry;
   $("modal-img").src = `/api/outputs/${encodeURIComponent(entry.name)}`;
+  // Add the metadata expanded_prompt right after raw_prompt so a
+  // user looking at a template-generated image sees both the typed
+  // template and the resolved text at a glance.
   const grid = $("modal-meta"); grid.innerHTML = "";
   const keys = ["model", "repo_id", "repo_url",
-                "raw_prompt", "prompt", "negative_prompt", "seed",
+                "raw_prompt", "expanded_prompt", "prompt",
+                "negative_prompt", "seed",
                 "steps", "cfg", "sampler", "clip_skip", "loras",
                 "width", "height", "dtype", "device"];
   const meta = entry.metadata || {};
@@ -591,11 +598,42 @@ function openModal(entry) {
     grid.appendChild(keyDiv); grid.appendChild(valDiv); grid.appendChild(btn);
   }
   updateModalFavButton();
+  updateModalNav();
   $("modal").classList.add("open");
 }
+// Hide prev/next at boundaries. Uses the `outputs` array which is
+// already filtered by the active tab (all/fav) — so navigation
+// implicitly respects the current filter without any extra wiring.
+function updateModalNav() {
+  if (!modalEntry) return;
+  const prev = neighborInOutputs(outputs, modalEntry.name, -1);
+  const next = neighborInOutputs(outputs, modalEntry.name, +1);
+  $("modal-prev").hidden = prev === null;
+  $("modal-next").hidden = next === null;
+}
+function navigateModal(direction) {
+  if (!modalEntry) return;
+  const target = neighborInOutputs(outputs, modalEntry.name, direction);
+  if (target !== null) openModal(target);
+}
+$("modal-prev").onclick = (e) => { e.stopPropagation(); navigateModal(-1); };
+$("modal-next").onclick = (e) => { e.stopPropagation(); navigateModal(+1); };
 $("modal-close").onclick = () => $("modal").classList.remove("open");
 $("modal").onclick = (e) => { if (e.target === $("modal")) $("modal").classList.remove("open"); };
 $("modal-fav").onclick = () => { if (modalEntry) toggleFavorite(modalEntry); };
+
+// Keyboard: ←/→ navigate, Esc closes — only while the modal is open
+// and the user isn't typing in an input or textarea (so the prompt
+// editor's arrow keys keep doing what they did before).
+document.addEventListener("keydown", (e) => {
+  if (!$("modal").classList.contains("open")) return;
+  const tgt = e.target;
+  if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA"
+              || tgt.isContentEditable)) return;
+  if (e.key === "ArrowLeft") { e.preventDefault(); navigateModal(-1); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); navigateModal(+1); }
+  else if (e.key === "Escape") { $("modal").classList.remove("open"); }
+});
 
 // Build a single /api/exec line from previous-run metadata, and load it into
 // the prompt textarea. Shared by the modal restore button and thumbnail reload

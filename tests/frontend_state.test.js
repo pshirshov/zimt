@@ -79,6 +79,9 @@ function loadApp(overrides = {}) {
         return null;
       },
       querySelectorAll() { return []; },
+      // Stubbed for the modal-nav keydown listener; see comment in
+      // tests/model_download_state.test.js.
+      addEventListener() {},
     },
     window: {
       innerWidth: 1200,
@@ -102,6 +105,7 @@ function loadApp(overrides = {}) {
       }
     },
     buildRestorePromptLine() { return ""; },
+    neighborInOutputs() { return null; },
     tokenAtCursor() { return { start: 0, end: 0, text: "" }; },
     completionItems() { return []; },
     promptArrowAction() { return "native"; },

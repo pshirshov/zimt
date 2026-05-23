@@ -161,6 +161,46 @@
   .hl-comment { color: #6a737d; font-style: italic; }
   .hl-escape { color: #8b949e; }
 
+  /* Compact `?` button in the topbar — opens the help modal. Same
+     pill geometry as the state pills so it visually belongs in the bar
+     without standing out as a primary action. */
+  .help-btn { width: 22px; height: 22px; padding: 0; border-radius: 50%;
+              background: var(--panel); border: 1px solid var(--border);
+              color: var(--muted); font: 600 13px ui-monospace, monospace;
+              cursor: pointer; line-height: 1; }
+  .help-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* Help modal layout. Reuses the .modal base (overlay + open class)
+     from the image preview modal; only the inner card needs custom
+     dimensions and the documentation-friendly type rules. */
+  .help-inner { max-width: 880px; padding: 20px 24px; flex-direction: column;
+                gap: 0; max-height: 90vh; overflow-y: auto; }
+  .help-header { display: flex; align-items: center; gap: 12px;
+                 margin-bottom: 14px; border-bottom: 1px solid var(--border);
+                 padding-bottom: 10px; }
+  .help-header h2 { margin: 0; font-size: 16px; color: var(--fg);
+                    font-weight: 600; flex: 1 1 auto; }
+  #help-close { margin-left: auto; padding: 4px 10px; }
+  #help-close:hover { background: #3a2a2a; border-color: var(--error); color: var(--error); }
+  .help-body { display: flex; flex-direction: column; gap: 16px; }
+  .help-section h3 { margin: 0 0 6px 0; font-size: 13px; color: var(--accent);
+                     font-weight: 600; text-transform: uppercase;
+                     letter-spacing: 0.05em; }
+  .help-section .help-note { margin: 0 0 8px 0; color: var(--muted);
+                             font-size: 12px; font-style: italic; }
+  .help-dl { display: grid; grid-template-columns: minmax(120px, max-content) 1fr;
+             column-gap: 14px; row-gap: 4px; margin: 0;
+             font: 13px/1.5 ui-monospace, monospace; }
+  .help-dl dt { color: var(--fg); white-space: nowrap; }
+  .help-dl dt code { color: var(--accent); }
+  .help-dl dd { margin: 0; color: var(--muted); font-family: inherit; }
+  .help-dl dd code { color: #e6c66a; background: rgba(255,255,255,0.05);
+                     padding: 0 4px; border-radius: 2px; font-size: 12px; }
+  .help-dl kbd { display: inline-block; padding: 1px 6px;
+                 background: var(--panel); border: 1px solid var(--border);
+                 border-radius: 3px; font: 12px ui-monospace, monospace;
+                 color: var(--fg); line-height: 1.4; }
+
   /* GPU stats pill sits on the right edge of the topbar. */
   .gpu-pill { margin-left: auto; font-family: ui-monospace, monospace;
               cursor: pointer; }

@@ -15,6 +15,9 @@
   <div class="left">
     <div class="topbar">
       <h1>zimt</h1>
+      <button id="help-btn" class="help-btn" type="button"
+              title="reference: commands, prompt syntax, shortcuts"
+              aria-label="show help">?</button>
       <div class="left-tabs" role="tablist" aria-label="left panel">
         <button class="ltab active" data-ltab="inference" role="tab"
                 aria-selected="true">inference</button>
@@ -204,6 +207,116 @@
         <button id="error-popup-copy">copy</button>
         <button id="error-popup-close" style="margin-left: auto;">✕ close</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="help-modal" aria-hidden="true" role="dialog" aria-labelledby="help-title">
+  <div class="modal-inner help-inner">
+    <div class="help-header">
+      <h2 id="help-title">zimt reference</h2>
+      <button id="help-close" type="button" aria-label="close help">✕ close</button>
+    </div>
+    <div class="help-body">
+
+      <section class="help-section">
+        <h3>Submitting</h3>
+        <dl class="help-dl">
+          <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>queue prompt and clear the editor</dd>
+          <dt><kbd>Shift</kbd>+<kbd>Enter</kbd></dt><dd>queue prompt and keep the editor text (iterate)</dd>
+          <dt><kbd>Enter</kbd></dt><dd>insert a newline</dd>
+        </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Completion popup</h3>
+        <dl class="help-dl">
+          <dt><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></dt><dd>cycle through suggestions</dd>
+          <dt><kbd>↑</kbd> / <kbd>↓</kbd></dt><dd>move selection in the popup</dd>
+          <dt><kbd>Enter</kbd> (popup open)</dt><dd>accept the highlighted item</dd>
+          <dt><kbd>Esc</kbd></dt><dd>dismiss the popup</dd>
+        </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Prompt-history navigation</h3>
+        <dl class="help-dl">
+          <dt><kbd>↑</kbd> at start of input</dt><dd>step back through recent prompts</dd>
+          <dt><kbd>↓</kbd> at end of input</dt><dd>step forward toward the current draft</dd>
+        </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Generation commands</h3>
+        <p class="help-note">Commands may appear anywhere on the line; the trailing free text is the prompt.</p>
+        <dl class="help-dl">
+          <dt><code>/raw &lt;prompt&gt;</code></dt><dd>skip the model's auto-prefix (e.g. score tags)</dd>
+          <dt><code>/many N &lt;prompt&gt;</code></dt><dd>generate N images with sequential seeds</dd>
+          <dt><code>/seed N</code></dt><dd>pin a seed for the next generation</dd>
+          <dt><code>/negprompt [text]</code></dt><dd>set/clear negative prompt — <code>-</code> clears, empty shows current</dd>
+        </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Settings commands</h3>
+        <dl class="help-dl">
+          <dt><code>/cfg N</code></dt><dd>guidance scale</dd>
+          <dt><code>/steps N</code></dt><dd>inference step count</dd>
+          <dt><code>/size W H</code></dt><dd>set output width × height (multiples of 16)</dd>
+          <dt><code>/res &lt;N|WxH&gt;</code></dt><dd>preset index or explicit dimensions</dd>
+          <dt><code>/sampler &lt;name&gt;</code></dt><dd>switch scheduler — tab-completion shows the model's allowed list</dd>
+          <dt><code>/clip_skip N</code></dt><dd>SDXL only — skip top N CLIP layers (0 = off)</dd>
+        </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Model + memory</h3>
+        <dl class="help-dl">
+          <dt><code>/model &lt;name&gt;</code></dt><dd>load a model — bare lists; tab-completes installed names</dd>
+          <dt><code>/lora &lt;spec&gt;</code></dt><dd>stack LoRAs — <code>name</code> / <code>name:0.8</code> / <code>-name</code> (remove) / <code>-</code> (clear all)</dd>
+          <dt><code>/tokenize &lt;text&gt;</code></dt><dd>show per-encoder token analysis</dd>
+          <dt><code>/mem [mode [arg]]</code></dt>
+            <dd>memory placement strategy. Modes: <code>off</code>, <code>max &lt;size&gt;</code>, <code>cpuoffload</code>, <code>cpuoffload-seq</code>. Changing mode reloads the current model.</dd>
+        </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Prompt syntax (template DSL)</h3>
+        <p class="help-note">Expanded once per generation, deterministic per seed; the resolved text feeds the encoder.</p>
+        <dl class="help-dl">
+          <dt><code>{a|b|c}</code></dt><dd>alternation — pick one uniformly</dd>
+          <dt><code>{2::a|1::b}</code></dt><dd>weighted alternation (2/3 a, 1/3 b)</dd>
+          <dt><code>{a {b|c}|d}</code></dt><dd>nesting works to any depth</dd>
+          <dt><code>{|a|b}</code></dt><dd>empty option allowed — "maybe nothing"</dd>
+          <dt><code>${name=red|green|blue}</code></dt>
+            <dd>bind a variable (silent — definition site renders to <code>""</code>); <code>|</code> is implicit alternation sugar inside the RHS</dd>
+          <dt><code>${name}</code></dt><dd>reference the bound value (reuse the pick)</dd>
+          <dt><code>${obj={k1=v1}, {k2=v2}}</code></dt>
+            <dd>composite variable — binds <code>obj.k1</code> and <code>obj.k2</code> as separate keys; fields nest arbitrarily</dd>
+          <dt><code>${obj.k1}</code></dt><dd>access a composite field (nested: <code>${a.b.c}</code>)</dd>
+          <dt><code>\{ \| \$</code></dt><dd>escape for literal braces / pipe / dollar</dd>
+          <dt><code>&lt;!-- foo --&gt;</code></dt><dd>HTML-style comment, stripped before encoding</dd>
+        </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Thumbnail buttons (gallery)</h3>
+        <dl class="help-dl">
+          <dt><code>1:1</code></dt><dd>fill the prompt with the exact original input line (verbatim round-trip; requires <code>command_line</code> metadata)</dd>
+          <dt><code>↺</code></dt><dd>restore prompt + settings, but re-roll a new random seed</dd>
+          <dt><code>=</code></dt><dd>restore prompt + settings + the original seed (pixel-exact replay)</dd>
+          <dt><code>☆ / ★</code></dt><dd>toggle favourite</dd>
+        </dl>
+      </section>
+
+      <section class="help-section">
+        <h3>Image preview modal</h3>
+        <dl class="help-dl">
+          <dt><kbd>←</kbd> / <kbd>→</kbd></dt><dd>navigate previous / next image within the current filter (all / favourites)</dd>
+          <dt><kbd>Esc</kbd></dt><dd>close the preview</dd>
+        </dl>
+      </section>
+
     </div>
   </div>
 </div>

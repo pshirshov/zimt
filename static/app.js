@@ -643,17 +643,41 @@ $("modal-close").onclick = () => $("modal").classList.remove("open");
 $("modal").onclick = (e) => { if (e.target === $("modal")) $("modal").classList.remove("open"); };
 $("modal-fav").onclick = () => { if (modalEntry) toggleFavorite(modalEntry); };
 
-// Keyboard: ←/→ navigate, Esc closes — only while the modal is open
-// and the user isn't typing in an input or textarea (so the prompt
-// editor's arrow keys keep doing what they did before).
+// Help modal — static reference popup. Topbar `?` opens; click outside,
+// the close button, or Esc dismisses. The content lives in index.html
+// (search for `id="help-modal"`) so non-engineers can edit the wording
+// without touching JS.
+$("help-btn").onclick = () => {
+  $("help-modal").classList.add("open");
+  $("help-modal").setAttribute("aria-hidden", "false");
+};
+function closeHelp() {
+  $("help-modal").classList.remove("open");
+  $("help-modal").setAttribute("aria-hidden", "true");
+}
+$("help-close").onclick = closeHelp;
+$("help-modal").onclick = (e) => { if (e.target === $("help-modal")) closeHelp(); };
+
+// Keyboard: ←/→ navigate the image-preview modal, Esc closes whichever
+// modal happens to be open (preview or help). Gated on the user NOT
+// being in an editable element so the prompt editor's keys keep their
+// own behaviour.
 document.addEventListener("keydown", (e) => {
-  if (!$("modal").classList.contains("open")) return;
   const tgt = e.target;
-  if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA"
-              || tgt.isContentEditable)) return;
-  if (e.key === "ArrowLeft") { e.preventDefault(); navigateModal(-1); }
-  else if (e.key === "ArrowRight") { e.preventDefault(); navigateModal(+1); }
-  else if (e.key === "Escape") { $("modal").classList.remove("open"); }
+  const editing = tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA"
+                          || tgt.isContentEditable);
+  if (editing) return;
+  const previewOpen = $("modal").classList.contains("open");
+  const helpOpen = $("help-modal").classList.contains("open");
+  if (!previewOpen && !helpOpen) return;
+  if (e.key === "Escape") {
+    if (helpOpen) closeHelp();
+    if (previewOpen) $("modal").classList.remove("open");
+    return;
+  }
+  // Arrow-key navigation only applies to the image preview modal.
+  if (previewOpen && e.key === "ArrowLeft") { e.preventDefault(); navigateModal(-1); }
+  else if (previewOpen && e.key === "ArrowRight") { e.preventDefault(); navigateModal(+1); }
 });
 
 // Build a single /api/exec line from previous-run metadata, and load it into

@@ -181,35 +181,10 @@ def _tokenize_text(text: str) -> str:
     return _ANSI_RE.sub("", buf.getvalue().rstrip())
 
 
-_HELP_LINES = [
-    "commands:",
-    "  <prompt>               generate one image",
-    "  /raw <prompt>          skip the model's auto-prefix",
-    "  /many N <prompt>       generate N images",
-    "  /seed N                pin seed for next single gen",
-    "  /negprompt [text]      set/clear negative prompt ('-' clears)",
-    "  /cfg N                 guidance scale",
-    "  /steps N               num inference steps",
-    "  /size W H              set width × height",
-    "  /res <N|WxH>           preset index or explicit",
-    "  /sampler <name>        switch scheduler (model-specific)",
-    "  /clip_skip N           SDXL only — skip top N CLIP layers (0=off)",
-    "  /model <name>          load a model",
-    "  /lora <name>           add/update one LoRA (name, name:0.8, -name, -); repeat for stacking",
-    "  /tokenize <text>       show per-encoder token analysis",
-    "  /mem [mode [arg]]      memory strategy; bare shows current",
-    "                         modes: off | max <size> | cpuoffload | cpuoffload-seq",
-    "prompt syntax (deterministic per seed):",
-    "  {a|b|c}                alternation; supports nesting & {|a} for empty",
-    "  {2::a|1::b}            weighted alternation",
-    "  ${c=red|green|blue}    bind variable (silent); ${c} references it",
-    "  ${o={k=v}, {k=v}}      composite var: binds o.k for each field",
-    "  ${o.k}                 access a composite field (nested OK: o.a.b)",
-    "  \\{ \\| \\$                escape for literal braces / pipe / dollar",
-    "  <!-- foo -->           comment, stripped before encoding",
-    "multiple commands may be combined on one line, e.g.",
-    "  /model pony-v6-xl /cfg 5 /steps 25 cute anime girl",
-]
+# The web reference now lives in the help modal (static/index.html
+# #help-modal). The REPL keeps its own text-based help_() in
+# zimt/repl/main.py. /help in the web exec just emits a pointer to the
+# ? button — see the handler below.
 
 
 async def api_exec(body: ExecBody) -> dict[str, Any]:
@@ -340,9 +315,14 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
             log.append(output)
             await emit_log(output)
         elif cmd in ("/help", "/?"):
-            for ln in _HELP_LINES:
-                log.append(ln)
-                await emit_log(ln)
+            # The web UI hosts the full reference behind the topbar `?`
+            # button (id="help-btn") — emit_log is too narrow a surface
+            # for the multi-section content. We acknowledge the command
+            # so users who type it from muscle memory get a pointer
+            # rather than silence.
+            msg = "see the ? button in the top bar for the full reference"
+            log.append(msg)
+            await emit_log(msg)
         elif cmd in ("/quit", "/exit", "/q"):
             log.append("(ignored — web UI; close the browser tab to leave)")
         else:

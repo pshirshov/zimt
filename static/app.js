@@ -654,6 +654,7 @@ let editingDraft = "";        // saved when entering history mode
 
 // Auto-grow the textarea wrap (which sizes the absolute-positioned overlay)
 // to fit the content. Also re-renders the syntax-highlighted mirror.
+// `clampToMaxHeight` is provided by static/prompt_resize.js.
 const inputWrap = document.querySelector(".textarea-wrap");
 const highlight = $("prompt-highlight");
 
@@ -661,8 +662,33 @@ function autoResize() {
   // Skip while the inference pane is hidden — the textarea has no layout
   // box, so scrollHeight is 0 and we'd otherwise collapse it permanently.
   if (input.offsetParent === null) return;
+  // The textarea has `position: absolute; inset: 0` in the stylesheet,
+  // so it's pinned to all four edges of the wrap. Setting
+  // `input.style.height = "auto"` alone does NOT release that constraint
+  // — the textarea still fills whatever height the wrap currently has,
+  // which means scrollHeight is floored by the previous box size. That
+  // breaks two ways:
+  //   * after `submit()` clears the value the wrap stays large, and
+  //     each keystroke trims one pixel of sub-pixel rounding noise
+  //     until the box finally matches the now-tiny content;
+  //   * while a multi-line prompt grows, scrollHeight oscillates ±1
+  //     line because the rounded line-height (14 * 1.4 = 19.6px) keeps
+  //     crossing the currently-painted height boundary.
+  // To get a clean measurement we drop the wrap's inline height so the
+  // wrap collapses to its CSS min-height (2.5em). The textarea then
+  // fills that minimal box, and scrollHeight returns the true content
+  // height regardless of whatever height we had set last time.
+  inputWrap.style.height = "";
   input.style.height = "auto";
-  const h = input.scrollHeight;
+  const contentH = input.scrollHeight;
+  // Cap at the textarea's own CSS max-height so the wrap (and therefore
+  // the highlight underlay, which is absolute-positioned within the
+  // wrap) cannot grow past the visible editor. Beyond the cap, the
+  // textarea handles overflow internally via its own scrollbar, and
+  // the input.scroll → highlight.scrollTop sync below keeps the
+  // highlight aligned with what's visible.
+  const maxH = parseFloat(getComputedStyle(input).maxHeight);
+  const h = clampToMaxHeight(contentH, maxH);
   input.style.height = h + "px";
   inputWrap.style.height = h + "px";
   highlight.style.height = h + "px";

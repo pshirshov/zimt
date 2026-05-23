@@ -171,15 +171,22 @@ def expand(text: str, rng: random.Random) -> str:
 
 # ---------- pass 1: verbatim preprocessor ----------
 
-def _pass1_verbatim(text: str) -> str:
+def _pass1_verbatim(text: str, env: dict[str, str] | None = None) -> str:
     """Substitute every ``${name=`raw`}`` def and every ``${name}`` ref
     that resolves to a verbatim binding. Everything else passes through
     unchanged so pass 2's full parser sees it as the user typed.
 
+    Recurses into non-verbatim ``${...}`` bodies (composite defs, scalar
+    defs whose RHS is a regular expression, etc.) so verbatim references
+    nested inside — e.g. ``${boyA={type=${clothesType}}}`` — are
+    substituted before pass 2 attempts to render them. The shared
+    ``env`` argument carries verbatim bindings across the recursion.
+
     No alternation picking happens here — pass 1 is RNG-free and
     semantically a textual transform.
     """
-    env: dict[str, str] = {}
+    if env is None:
+        env = {}
     out: list[str] = []
     n = len(text)
     i = 0
@@ -218,8 +225,14 @@ def _pass1_verbatim(text: str) -> str:
                 out.append(replacement)
                 i = close + 1
                 continue
-            # Non-verbatim def / unbindable ref — leave untouched for pass 2.
-            out.append(text[i:close + 1])
+            # Non-verbatim def or unbindable ref. Recurse on the body
+            # so verbatim refs nested inside (composite field values,
+            # scalar RHS, etc.) get substituted using the same env.
+            # Re-wrap the transformed body in ${...} for pass 2.
+            transformed_body = _pass1_verbatim(body, env)
+            out.append("${")
+            out.append(transformed_body)
+            out.append("}")
             i = close + 1
             continue
         out.append(c)

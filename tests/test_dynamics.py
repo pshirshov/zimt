@@ -353,6 +353,62 @@ class ValidateTests(unittest.TestCase):
 
 # ---------- integration (realistic prompts) ----------
 
+class VerbatimNestingTests(unittest.TestCase):
+    """Pass 1 must recurse into non-verbatim ``${...}`` blocks so refs
+    to verbatim variables nested inside composite defs get substituted
+    before pass 2 evaluates the composite."""
+
+    def test_verbatim_ref_inside_composite_field_resolves(self) -> None:
+        # Without recursion, the inner `${tt}` would survive pass 1 and
+        # pass 2 would error with "undefined variable 'tt'" because
+        # pass 2's env starts fresh.
+        out = expand(
+            "${tt=`[shorts|skirt]`}"
+            "${p={clothes={type=${tt}}}}"
+            "${p.clothes.type}",
+            _r(0),
+        )
+        self.assertIn(out, {"shorts", "skirt"})
+
+    def test_two_composites_share_verbatim_templates(self) -> None:
+        # Regression: two composite definitions both reference the same
+        # verbatim variables. Pass 1 must inline each ref independently
+        # so the composites' fields re-roll, rather than locking to a
+        # single shared pick across both composites.
+        template = (
+            "${shape=`[circle|square|triangle]`}"
+            "${size=`[small|medium|large]`}"
+            "${shade=`[bright|dim|muted]`}"
+            "${itemA={attrs={hue=[red|yellow|orange], "
+                "shape=${shape}, size=${size}, shade=${shade}}}}"
+            "${itemB={attrs={hue=[grey|blue|green], "
+                "shape=${shape}, size=${size}, shade=${shade}}}}"
+            "A: ${itemA.attrs.hue} ${itemA.attrs.shade} "
+            "${itemA.attrs.size} ${itemA.attrs.shape}. "
+            "B: ${itemB.attrs.hue} ${itemB.attrs.shade} "
+            "${itemB.attrs.size} ${itemB.attrs.shape}."
+        )
+        # Shape check: every field resolves to one of its option set.
+        out = expand(template, _r(0))
+        self.assertRegex(
+            out,
+            r"^A: (red|yellow|orange) (bright|dim|muted) "
+            r"(small|medium|large) (circle|square|triangle)\. "
+            r"B: (grey|blue|green) (bright|dim|muted) "
+            r"(small|medium|large) (circle|square|triangle)\.$",
+        )
+        # Diversity check: across many seeds we should see many distinct
+        # outputs — only possible if each verbatim reference actually
+        # picks independently rather than locking to one shared value.
+        outputs = set()
+        for seed in range(50):
+            outputs.add(expand(template, _r(seed)))
+        self.assertGreater(
+            len(outputs), 20,
+            f"expected many distinct outputs, got {len(outputs)}",
+        )
+
+
 class IntegrationTests(unittest.TestCase):
     def test_typical_outfit_prompt(self) -> None:
         out = expand(

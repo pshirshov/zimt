@@ -113,21 +113,27 @@ test("forward references are not suggested", () => {
   assert.deepEqual(items, []);
 });
 
-test("definedVarNames extracts composite field paths", () => {
-  // User's exact syntax: `${p={hair=long|short}, {clothes=red|blue}}`
-  // should yield ["p.hair", "p.clothes"] — both flat-dotted leaves.
+test("definedVarNames extracts composite field paths (new JSON-like syntax)", () => {
+  // `${p={hair=[long|short], clothes=[red|blue]}}` → ["p.hair", "p.clothes"]
   const names = definedVarNames(
-    "${p={hair=long|short}, {clothes=red|blue}}"
+    "${p={hair=[long|short], clothes=[red|blue]}}"
   );
   assert.deepEqual(names, ["p.hair", "p.clothes"]);
 });
 
 test("definedVarNames extracts nested composite field paths", () => {
-  // Nested object literal: outfit.shirt and outfit.pants.
+  // Nested object literal: outfit.{shirt, pants}, plus hair at top level.
   const names = definedVarNames(
-    "${p={outfit={shirt=red}, {pants=blue}}, {hair=long}}"
+    "${p={outfit={shirt=red, pants=blue}, hair=long}}"
   );
   assert.deepEqual(names, ["p.outfit.shirt", "p.outfit.pants", "p.hair"]);
+});
+
+test("definedVarNames handles verbatim definitions", () => {
+  // `${name=\`raw\`}` binds `name` to literal text. The completer
+  // should offer the bare name (no field expansion since it's scalar).
+  const names = definedVarNames("${tt=`[shorts|skirt]`}");
+  assert.deepEqual(names, ["tt"]);
 });
 
 test("definedVarNames flat-dotted def is accepted directly", () => {
@@ -139,11 +145,9 @@ test("definedVarNames flat-dotted def is accepted directly", () => {
 
 test("dotted reference completion suggests composite fields", () => {
   // User types `${personA.h<TAB>` after defining the composite.
-  const value =
-    "${personA={hair=long|short}, {clothes=red|blue}}" +
-    "${personA.h";
-  // tokStart was narrowed by updateSuggest to point at the second `$`.
-  const tokStart = "${personA={hair=long|short}, {clothes=red|blue}}".length;
+  const def = "${personA={hair=[long|short], clothes=[red|blue]}}";
+  const value = def + "${personA.h";
+  const tokStart = def.length;
   const tokText = "${personA.h";
   const items = completionItems(value, tokStart, tokText, {});
   assert.deepEqual(
@@ -153,11 +157,9 @@ test("dotted reference completion suggests composite fields", () => {
 });
 
 test("dotted reference completion without typed field suggests all fields", () => {
-  // `${personA.<TAB>` with nothing after the dot — both fields offered.
-  const value =
-    "${personA={hair=long|short}, {clothes=red|blue}}" +
-    "${personA.";
-  const tokStart = "${personA={hair=long|short}, {clothes=red|blue}}".length;
+  const def = "${personA={hair=[long|short], clothes=[red|blue]}}";
+  const value = def + "${personA.";
+  const tokStart = def.length;
   const items = completionItems(value, tokStart, "${personA.", {});
   assert.deepEqual(
     items.map((it) => it.label),

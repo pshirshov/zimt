@@ -140,33 +140,47 @@ write a focused unit test next to similar ones in
 
 ## Dynamic prompt syntax
 
-`src/zimt/dynamics.py` implements A1111/ComfyUI-style alternation +
-variables: `{a|b|c}`, weighted (`{2::a|1::b}`), nesting, empty options
-(`{|a}`), variables (`${c=red|green}` then `${c}`), escapes (`\{`), and
-HTML-style comments (`<!-- foo -->`). Expansion runs once per
+`src/zimt/dynamics.py` implements a JSON-like template DSL with
+two-pass verbatim expansion:
+
+- `[a|b|c]` — alternation (only when `|` appears between matched
+  brackets; bare `[word]` stays literal so compel's `[word]-` negative
+  weighting passes through unchanged).
+- `${name=value}` — scalar definition, silent.
+- `${name}` — reference.
+- `${obj={k1=v1, k2=v2}}` — JSON-like composite; field paths flatten
+  to `obj.k1` etc. at parse time (`MultiVarDef` in the AST). Fields
+  nest: `${a={b={c=v}}}` → env key `a.b.c`.
+- `${obj.k1}` — access composite field (any depth).
+- `` ${name=`raw text`} `` — verbatim definition. The value is stored
+  as raw text; each reference inlines it and pass 2 re-parses, so two
+  references to `` `[shorts|skirt]` `` produce two independent picks.
+- `\[ \] \{ \} \| \$ \` ` — escapes for literals.
+- `<!-- foo -->` — comment, stripped before parsing.
+
+**Two-pass expansion:**
+- **Pass 1** (`_pass1_verbatim`) is RNG-free. It scans for
+  `` ${name=`text`} `` definitions (storing the raw value in a local
+  env, removing the def from the text) and `${name}` references that
+  resolve to verbatim values (substituting the raw text inline). All
+  other syntax — non-verbatim defs, refs to non-verbatim names,
+  alternations, composite literals — passes through unchanged.
+- **Pass 2** (`_parse_top` + `_render`) is the full evaluator. Fresh
+  env, RNG consumed only here. Sees the post-substitution text, so
+  verbatim-inlined `[shorts|skirt]` etc. are evaluated as new
+  alternations, giving the "re-roll per reference" semantic.
+
+Both passes are deterministic per seed (pass 1 never touches the RNG;
+pass 2 consumes it from the seed). Expansion happens once per
 `generate()` call, after the seed is picked and before `compose_prompt`
-prepends the score-tag prefix — so a model's score tags can never be
-template-expanded accidentally.
+prepends any score-tag prefix.
 
-Variables bind silently — the definition site renders to "" so the
-prompt reads cleanly. Inside `${name=...}`, `|` acts as an implicit
-choice separator (sugar). The variable environment is fresh per
-`expand()` call; nothing leaks between successive generations. Forward
-references raise `DynamicsSyntaxError`. A reference to a variable that
-was only defined inside a Choice branch the seed didn't pick also
-raises — the error message says so explicitly.
+References to undefined names raise `DynamicsSyntaxError`. References
+to composite parents (e.g. `${person}` when only `person.hair` is
+bound) raise the same — composites don't render as scalars.
 
-Composite variables: `${person={hair=long|short}, {clothes=red|blue}}`
-binds `person.hair` and `person.clothes` as separate flat-dotted env
-keys, evaluated left-to-right against the same RNG. Fields nest:
-`${p={outfit={top=...}, {bottom=...}}}` flattens to `p.outfit.top` and
-`p.outfit.bottom` at parse time (`MultiVarDef` in the AST). The
-disambiguating signal is `{<ident>=` at the start of the RHS — without
-it, the brace stays a regular Choice. `${person}` (no dot) is an
-undefined-variable error; composite parents don't render as scalars.
-
-`${a.b=...}` flat-dotted form is also accepted and is exactly equivalent
-to the composite spelling — same env key, no semantic difference.
+`${a.b=...}` flat-dotted form is exactly equivalent to the composite
+spelling — same env key, no semantic difference.
 
 Determinism is anchored to the same `seed` that drives image sampling.
 A `random.Random(seed)` instance is created inside `expand()`; the torch

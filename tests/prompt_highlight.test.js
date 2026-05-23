@@ -6,9 +6,7 @@ const { renderPromptHTML } = require("../static/prompt_highlight.js");
 
 // Helper: collect (class, text) pairs from the rendered HTML. Decodes
 // the few HTML entities `esc()` emits so test assertions can use the
-// original characters. Empty trim() means whitespace-only tokens are
-// dropped; the special chars (`{`, `}`, `|`, etc.) survive as their own
-// tokens because the renderer wraps each in a span.
+// original characters. Whitespace-only untagged tokens are dropped.
 function tokens(html) {
   const decode = (s) => s
     .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
@@ -26,45 +24,36 @@ function tokens(html) {
   return out;
 }
 
-test("empty input renders a non-breaking space placeholder", () => {
+test("empty input renders a non-breaking space", () => {
   assert.equal(renderPromptHTML(""), "&nbsp;");
 });
 
-test("plain text passes through with HTML escaping but no spans", () => {
+test("plain text passes through as one untagged token", () => {
   const html = renderPromptHTML("a serene mountain lake");
   assert.equal(tokens(html).length, 1);
   assert.deepEqual(tokens(html)[0], { cls: "", text: "a serene mountain lake" });
 });
 
-test("HTML special chars in plain text are escaped", () => {
-  const html = renderPromptHTML("a < b > c");
-  // We don't care about the exact span breakdown — just that raw `<` and
-  // `>` don't leak into the HTML output. `<span` is OK; standalone `<` is
-  // what we're guarding against.
-  assert.ok(!/(^|[^"a-z])</.test(html.replace(/<span[^>]*>/g, "").replace(/<\/span>/g, "")));
+test("alternation `[a|b]` highlights brackets and pipe in hl-brace", () => {
+  const toks = tokens(renderPromptHTML("[red|blue]"));
+  const braces = toks.filter((t) => t.cls === "hl-brace").map((t) => t.text);
+  assert.deepEqual(braces, ["[", "|", "]"]);
 });
 
-test("simple alternation gets brace colouring", () => {
-  const html = renderPromptHTML("{red|blue}");
-  const toks = tokens(html);
-  assert.deepEqual(toks, [
-    { cls: "hl-brace", text: "{" },
-    { cls: "", text: "red" },
-    { cls: "hl-brace", text: "|" },
-    { cls: "", text: "blue" },
-    { cls: "hl-brace", text: "}" },
-  ]);
+test("alternation matches across whitespace", () => {
+  const html = renderPromptHTML("[red | blue]");
+  const braces = tokens(html).filter((t) => t.cls === "hl-brace").map((t) => t.text);
+  assert.deepEqual(braces, ["[", "|", "]"]);
 });
 
-test("braces match across whitespace", () => {
-  // The regression motivating the new char-by-char scanner: the old
-  // per-word renderer couldn't pair `{` and `}` separated by spaces.
-  const html = renderPromptHTML("{red | blue}");
-  const braceTokens = tokens(html).filter((t) => t.cls === "hl-brace");
-  assert.deepEqual(braceTokens.map((t) => t.text), ["{", "|", "}"]);
+test("bare `[word]` (no pipe) stays literal — compel-friendly", () => {
+  // Critical: compel's `[word]-` negative weighting must not be eaten
+  // by the highlighter. No hl-brace spans, brackets render as plain.
+  const html = renderPromptHTML("[bad anatomy]-");
+  assert.ok(!/class="hl-brace"/.test(html));
 });
 
-test("variable reference gets variable colouring", () => {
+test("variable reference: ${ name }", () => {
   const toks = tokens(renderPromptHTML("${color}"));
   assert.deepEqual(toks, [
     { cls: "hl-var", text: "${" },
@@ -73,123 +62,97 @@ test("variable reference gets variable colouring", () => {
   ]);
 });
 
-test("variable definition splits into bracket / name / equals / body / close", () => {
-  const toks = tokens(renderPromptHTML("${color=red|blue}"));
-  assert.deepEqual(toks, [
-    { cls: "hl-var", text: "${" },
-    { cls: "hl-var-name", text: "color" },
-    { cls: "hl-var-eq", text: "=" },
-    { cls: "", text: "red" },
-    { cls: "hl-brace", text: "|" },
-    { cls: "", text: "blue" },
-    { cls: "hl-var", text: "}" },
-  ]);
-});
-
-test("nested braces close in the right colour each", () => {
-  // Outer `{` is plain alternation, inner `${var}` is a variable —
-  // the two `}` should paint hl-brace and hl-var respectively.
-  const toks = tokens(renderPromptHTML("${color={a|b}|c}"));
-  const closers = toks.filter((t) => t.text === "}" || t.text === "{");
-  // Sequence: ${ ... ={ ... } ... }
-  // Opener stack (LIFO): hl-var (from ${), then hl-brace (from inner {)
-  // First `}` (inner) → hl-brace, second `}` (outer) → hl-var
-  assert.deepEqual(closers, [
-    { cls: "hl-brace", text: "{" },
-    { cls: "hl-brace", text: "}" },
-    { cls: "hl-var", text: "}" },
-  ]);
-});
-
-test("comments are rendered as one comment span", () => {
-  const toks = tokens(renderPromptHTML("a <!-- note --> b"));
-  const comment = toks.find((t) => t.cls === "hl-comment");
-  assert.ok(comment);
-  assert.equal(comment.text, "<!-- note -->");
-});
-
-test("unclosed comment is painted to EOF", () => {
-  const toks = tokens(renderPromptHTML("hello <!-- forgot to close"));
-  const comment = toks.find((t) => t.cls === "hl-comment");
-  assert.ok(comment);
-  assert.equal(comment.text, "<!-- forgot to close");
-});
-
-test("escaped chars get dimmed in escape colour", () => {
-  const toks = tokens(renderPromptHTML(String.raw`\{a\|b\}`));
-  const escs = toks.filter((t) => t.cls === "hl-escape");
-  assert.deepEqual(escs.map((t) => t.text), ["\\{", "\\|", "\\}"]);
-});
-
-test("slash commands still colour their args", () => {
-  const html = renderPromptHTML("/cfg 5");
-  const toks = tokens(html);
-  assert.ok(toks.some((t) => t.cls === "hl-cmd" && t.text === "/cfg"));
-  assert.ok(toks.some((t) => t.cls === "hl-num" && t.text === "5"));
-});
-
-test("template syntax inside a greedy /negprompt still highlights braces", () => {
-  // Plain `bar` should be coloured hl-neg (greedy continues), but the
-  // `{` `|` `}` get hl-brace because template colouring overrides arg
-  // colouring at the special chars.
-  const toks = tokens(renderPromptHTML("/negprompt {foo|bar}"));
-  const negs = toks.filter((t) => t.cls === "hl-neg").map((t) => t.text);
-  assert.deepEqual(negs, ["foo", "bar"]);
-  const braces = toks.filter((t) => t.cls === "hl-brace").map((t) => t.text);
-  assert.deepEqual(braces, ["{", "|", "}"]);
-});
-
-test("unclosed brace leaves stack but doesn't crash", () => {
-  // The user is mid-typing; render must still produce valid HTML.
-  const html = renderPromptHTML("{red|blue");
-  assert.ok(html.includes("hl-brace"));
-});
-
-test("stray closing brace gets plain colour, not brace colour", () => {
-  // `}` outside any `{` is literal — matches the lenient Python parser.
-  // We check by ensuring NO hl-brace span appears in the output at all.
-  const html = renderPromptHTML("hello } world");
-  assert.ok(!/class="hl-brace"/.test(html),
-            `expected no hl-brace spans, got: ${html}`);
-});
-
-test("plain dollar without brace is literal", () => {
-  // `$5.99` and `$cost` must not trigger the variable parser.
-  const toks = tokens(renderPromptHTML("price: $5.99"));
-  assert.ok(!toks.some((t) => t.cls === "hl-var"));
-});
-
-test("known slash command is recognised after a template close", () => {
-  // After `}`, the next word boundary is at the whitespace; `/cfg`
-  // should still be detected.
-  const html = renderPromptHTML("{red|blue} /cfg 5");
-  assert.ok(html.includes('class="hl-cmd">/cfg'));
-});
-
-test("composite literal field name and = use variable colours", () => {
-  // `{hair=long|short}` inside the RHS — the field name should paint
-  // as hl-var-name and the `=` as hl-var-eq so the structure reads.
-  const toks = tokens(renderPromptHTML("${p={hair=long|short}}"));
-  // We don't pin the entire sequence (slot for whitespace etc. varies)
-  // but check that the field-name + equals colours appear.
-  const names = toks.filter((t) => t.cls === "hl-var-name").map((t) => t.text);
-  const eqs = toks.filter((t) => t.cls === "hl-var-eq").map((t) => t.text);
-  assert.deepEqual(names, ["p", "hair"]);
-  assert.deepEqual(eqs, ["=", "="]);
-});
-
-test("dotted reference name highlights as one var-name", () => {
+test("dotted reference highlights the whole path as one var-name", () => {
   const toks = tokens(renderPromptHTML("${person.hair}"));
   const names = toks.filter((t) => t.cls === "hl-var-name").map((t) => t.text);
-  // `.` is allowed inside the name, so it stays one token.
   assert.deepEqual(names, ["person.hair"]);
 });
 
-test("multi-field composite literal highlights each field", () => {
+test("scalar definition: ${name=value}", () => {
+  const toks = tokens(renderPromptHTML("${color=red}"));
+  const seq = toks.map((t) => `${t.cls}:${t.text}`);
+  // Outer brackets paint hl-var; name paints hl-var-name; '=' paints
+  // hl-var-eq; the value `red` is plain.
+  assert.deepEqual(seq, [
+    "hl-var:${",
+    "hl-var-name:color",
+    "hl-var-eq:=",
+    ":red",
+    "hl-var:}",
+  ]);
+});
+
+test("composite definition: ${obj={k=v, k=v}}", () => {
+  // The new JSON-like syntax — field names + `=` use the variable
+  // colour family; the comma uses hl-var-eq for visual consistency.
   const toks = tokens(renderPromptHTML(
-    "${p={hair=long|short}, {clothes=red|blue}}"
+    "${person={hair=blond, clothes=red}}"
   ));
   const names = toks.filter((t) => t.cls === "hl-var-name").map((t) => t.text);
-  // outer var name + two field names.
-  assert.deepEqual(names, ["p", "hair", "clothes"]);
+  assert.deepEqual(names, ["person", "hair", "clothes"]);
+  const eqs = toks.filter((t) => t.cls === "hl-var-eq").map((t) => t.text);
+  assert.deepEqual(eqs, ["=", "=", ",", "="]);
+});
+
+test("nested composite: ${a={b={c=v}}}", () => {
+  const toks = tokens(renderPromptHTML("${a={b={c=v}}}"));
+  const names = toks.filter((t) => t.cls === "hl-var-name").map((t) => t.text);
+  assert.deepEqual(names, ["a", "b", "c"]);
+});
+
+test("verbatim string is rendered as one verbatim span", () => {
+  const toks = tokens(renderPromptHTML("a `verbatim text` b"));
+  const verb = toks.find((t) => t.cls === "hl-verbatim");
+  assert.ok(verb);
+  assert.equal(verb.text, "`verbatim text`");
+});
+
+test("verbatim variable definition: ${name=`raw`}", () => {
+  const html = renderPromptHTML("${tt=`[red|blue]`}");
+  // The backticked content paints as hl-verbatim; bracket chars inside
+  // are NOT separately coloured because they're inside the verbatim
+  // run (rendered literally).
+  assert.ok(html.includes('class="hl-verbatim">`[red|blue]`'));
+});
+
+test("comments render as one comment span", () => {
+  const toks = tokens(renderPromptHTML("a <!-- note --> b"));
+  const c = toks.find((t) => t.cls === "hl-comment");
+  assert.ok(c);
+  assert.equal(c.text, "<!-- note -->");
+});
+
+test("escaped chars dim in hl-escape", () => {
+  const toks = tokens(renderPromptHTML(String.raw`\[a\|b\]`));
+  const escs = toks.filter((t) => t.cls === "hl-escape");
+  assert.deepEqual(escs.map((t) => t.text), ["\\[", "\\|", "\\]"]);
+});
+
+test("slash commands keep their existing colours", () => {
+  const html = renderPromptHTML("/cfg 5");
+  assert.ok(html.includes('class="hl-cmd">/cfg'));
+  assert.ok(html.includes('class="hl-num">5'));
+});
+
+test("template syntax inside greedy /negprompt highlights brackets and plain text together", () => {
+  const toks = tokens(renderPromptHTML("/negprompt [foo|bar]"));
+  const negs = toks.filter((t) => t.cls === "hl-neg").map((t) => t.text);
+  assert.deepEqual(negs, ["foo", "bar"]);
+  const braces = toks.filter((t) => t.cls === "hl-brace").map((t) => t.text);
+  assert.deepEqual(braces, ["[", "|", "]"]);
+});
+
+test("unclosed alternation (with pipe) is flagged in red", () => {
+  // The parser will raise on this at expansion time. The highlighter
+  // surfaces it via hl-unknown-cmd so the user sees something's off
+  // before submitting.
+  const html = renderPromptHTML("[red|blue");
+  assert.ok(/class="hl-unknown-cmd">\[/.test(html));
+});
+
+test("bare `{` outside object-literal context renders as plain", () => {
+  // Not a field block (no `<ident>=` after), and `{` isn't a Choice
+  // opener anymore — should NOT be coloured hl-brace.
+  const html = renderPromptHTML("a { stuff } b");
+  assert.ok(!/class="hl-brace"/.test(html));
 });

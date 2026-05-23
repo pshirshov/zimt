@@ -160,6 +160,11 @@
   .hl-var-eq { color: #d19a66; }
   .hl-comment { color: #6a737d; font-style: italic; }
   .hl-escape { color: #8b949e; }
+  /* Verbatim string literal: backticked content that survives pass 1
+     as raw text. Greenish to set it apart from both alternation
+     (`hl-brace`) and variables (`hl-var`). */
+  .hl-verbatim { color: #98c379; background: rgba(255,255,255,0.04);
+                 padding: 0 2px; border-radius: 2px; }
 
   /* Compact `?` button in the topbar — opens the help modal. Same
      pill geometry as the state pills so it visually belongs in the bar

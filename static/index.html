@@ -282,20 +282,22 @@
 
       <section class="help-section">
         <h3>Prompt syntax (template DSL)</h3>
-        <p class="help-note">Expanded once per generation, deterministic per seed; the resolved text feeds the encoder.</p>
+        <p class="help-note">Two-pass expansion: pass 1 substitutes verbatims, pass 2 picks alternations + evaluates everything else. Deterministic per seed.</p>
         <dl class="help-dl">
-          <dt><code>{a|b|c}</code></dt><dd>alternation — pick one uniformly</dd>
-          <dt><code>{2::a|1::b}</code></dt><dd>weighted alternation (2/3 a, 1/3 b)</dd>
-          <dt><code>{a {b|c}|d}</code></dt><dd>nesting works to any depth</dd>
-          <dt><code>{|a|b}</code></dt><dd>empty option allowed — "maybe nothing"</dd>
-          <dt><code>${name=red|green|blue}</code></dt>
-            <dd>bind a variable (silent — definition site renders to <code>""</code>); <code>|</code> is implicit alternation sugar inside the RHS</dd>
+          <dt><code>[a|b|c]</code></dt><dd>alternation — pick one uniformly. Only recognised when a top-level <code>|</code> appears between matched brackets, so compel's <code>[word]-</code> negative weighting passes through unchanged.</dd>
+          <dt><code>[2::a|1::b]</code></dt><dd>weighted alternation (2/3 a, 1/3 b)</dd>
+          <dt><code>[a [b|c]|d]</code></dt><dd>nesting works to any depth</dd>
+          <dt><code>[|a|b]</code></dt><dd>empty option allowed — "maybe nothing"</dd>
+          <dt><code>${name=value}</code></dt>
+            <dd>scalar variable definition (silent — definition site renders to <code>""</code>)</dd>
           <dt><code>${name}</code></dt><dd>reference the bound value (reuse the pick)</dd>
-          <dt><code>${obj={k1=v1}, {k2=v2}}</code></dt>
-            <dd>composite variable — binds <code>obj.k1</code> and <code>obj.k2</code> as separate keys; fields nest arbitrarily</dd>
+          <dt><code>${obj={k1=v1, k2=v2}}</code></dt>
+            <dd>JSON-like composite definition — fields bind to <code>obj.k1</code>, <code>obj.k2</code> as flat-dotted keys. Field values can be alternations, verbatims, refs, or nested objects (<code>{k={k2=v}}</code>).</dd>
           <dt><code>${obj.k1}</code></dt><dd>access a composite field (nested: <code>${a.b.c}</code>)</dd>
-          <dt><code>\{ \| \$</code></dt><dd>escape for literal braces / pipe / dollar</dd>
-          <dt><code>&lt;!-- foo --&gt;</code></dt><dd>HTML-style comment, stripped before encoding</dd>
+          <dt><code>${name=`raw text`}</code></dt>
+            <dd>verbatim definition — value stored as literal text. Each <code>${name}</code> reference re-rolls independently because the inlined text is re-parsed in pass 2. Use for "this expression evaluated separately per usage" (e.g. two characters wearing different randomly-picked outfits from one template).</dd>
+          <dt><code>\[ \] \{ \} \| \$ \`</code></dt><dd>escape for literal brackets / braces / pipe / dollar / backtick</dd>
+          <dt><code>&lt;!-- foo --&gt;</code></dt><dd>HTML-style comment, stripped before parsing</dd>
         </dl>
       </section>
 

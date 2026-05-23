@@ -1,4 +1,14 @@
-"""Unit tests for zimt.dynamics — the wildcard / alternation expander."""
+"""Unit tests for zimt.dynamics — JSON-like template syntax with two-pass
+verbatim expansion.
+
+Syntax under test:
+  [a|b]                    alternation (lookahead: only when `|` present)
+  ${name=...}              scalar definition
+  ${name}                  reference
+  ${obj={k=v, k=v}}        composite definition (flattens to obj.k bindings)
+  ${obj.k}                 composite access
+  `verbatim text`          stored as raw, re-evaluated at reference site
+"""
 
 from __future__ import annotations
 
@@ -13,6 +23,7 @@ from zimt.dynamics import (  # noqa: E402
     DynamicsSyntaxError,
     expand,
     has_dynamics,
+    validate,
 )
 
 
@@ -20,438 +31,364 @@ def _r(seed: int) -> random.Random:
     return random.Random(seed)
 
 
+# ---------- has_dynamics ----------
+
 class HasDynamicsTests(unittest.TestCase):
     def test_plain_text_has_no_dynamics(self) -> None:
         self.assertFalse(has_dynamics(""))
         self.assertFalse(has_dynamics("a cat on a rug"))
 
-    def test_brace_triggers_dynamics(self) -> None:
-        self.assertTrue(has_dynamics("a {red|blue} cat"))
+    def test_brackets_alone_no_pipe_is_not_dynamics(self) -> None:
+        # `[word]` is compel-weighting syntax — must not trigger our parser.
+        self.assertFalse(has_dynamics("[word]"))
+
+    def test_brackets_with_pipe_triggers_dynamics(self) -> None:
+        self.assertTrue(has_dynamics("a [red|blue] cat"))
+
+    def test_var_syntax_triggers_dynamics(self) -> None:
+        self.assertTrue(has_dynamics("a ${color} cat"))
+
+    def test_verbatim_backtick_triggers_dynamics(self) -> None:
+        # Standalone backticks in body don't change behaviour but are
+        # cheap to scan; flagging them keeps the precheck conservative.
+        self.assertTrue(has_dynamics("a `literal` thing"))
 
     def test_comment_triggers_dynamics(self) -> None:
-        # Comments alone count — they still need stripping before encoding.
-        self.assertTrue(has_dynamics("a cat <!-- note --> on a rug"))
+        self.assertTrue(has_dynamics("a <!-- note --> cat"))
 
 
-class ExpandIdentityTests(unittest.TestCase):
-    """No template syntax → output equals input verbatim."""
+# ---------- identity / plain text ----------
 
-    def test_empty_string_round_trip(self) -> None:
+class IdentityTests(unittest.TestCase):
+    def test_empty_round_trip(self) -> None:
         self.assertEqual(expand("", _r(0)), "")
 
     def test_plain_text_round_trip(self) -> None:
         s = "a serene mountain lake at dawn"
         self.assertEqual(expand(s, _r(0)), s)
 
-    def test_unbraced_pipe_is_literal(self) -> None:
-        # Outside `{}`, `|` is not a separator.
+    def test_unbracketed_pipe_is_literal(self) -> None:
         self.assertEqual(expand("a|b", _r(0)), "a|b")
 
 
-class ExpandAlternationTests(unittest.TestCase):
+# ---------- alternation ----------
+
+class AlternationTests(unittest.TestCase):
     def test_two_option_alternation_is_deterministic_per_seed(self) -> None:
-        # Same seed → same pick across calls.
-        self.assertEqual(expand("{red|blue}", _r(42)), expand("{red|blue}", _r(42)))
+        self.assertEqual(expand("[red|blue]", _r(42)), expand("[red|blue]", _r(42)))
 
     def test_two_option_alternation_covers_both_options(self) -> None:
         seen: set[str] = set()
         for seed in range(20):
-            seen.add(expand("{red|blue}", _r(seed)))
+            seen.add(expand("[red|blue]", _r(seed)))
         self.assertEqual(seen, {"red", "blue"})
 
-    def test_single_option_alternation_returns_that_option(self) -> None:
-        # `{x}` has no real choice — should always render to "x".
-        for seed in range(5):
-            self.assertEqual(expand("{red}", _r(seed)), "red")
+    def test_brackets_without_pipe_are_literal(self) -> None:
+        # Compel-style `[word]-` must survive expansion intact.
+        self.assertEqual(expand("[word]-", _r(0)), "[word]-")
+        self.assertEqual(expand("[bad quality]", _r(0)), "[bad quality]")
 
-    def test_empty_alternation_renders_empty(self) -> None:
-        # `{}` is degenerate but well-defined.
-        for seed in range(5):
-            self.assertEqual(expand("a {} b", _r(seed)), "a  b")
-
-    def test_empty_option_can_render_nothing(self) -> None:
-        # `{a|}` means "a or nothing" — both should appear across seeds.
+    def test_empty_option_allowed(self) -> None:
+        # `[|a]` means "a or nothing" — both reachable across seeds.
         seen: set[str] = set()
         for seed in range(30):
-            seen.add(expand("hair{ red|}", _r(seed)))
+            seen.add(expand("hair[ red|]", _r(seed)))
         self.assertIn("hair red", seen)
         self.assertIn("hair", seen)
 
-
-class ExpandNestingTests(unittest.TestCase):
-    def test_nested_choice_renders_correctly(self) -> None:
+    def test_nested_alternation(self) -> None:
         results: set[str] = set()
         for seed in range(40):
-            results.add(expand("{a {b|c}|d}", _r(seed)))
-        # All three reachable expansions should appear given enough seeds.
+            results.add(expand("[a [b|c]|d]", _r(seed)))
         self.assertEqual(results, {"a b", "a c", "d"})
 
-    def test_deeply_nested_does_not_blow_up(self) -> None:
-        s = "{a {b {c {d|e}|f}|g}|h}"
-        # Mostly a smoke test: every seed should produce a non-empty string
-        # that's a member of the small enumerable set.
-        valid = {"h", "a g", "a b f", "a b c d", "a b c e"}
-        for seed in range(50):
-            self.assertIn(expand(s, _r(seed)), valid)
-
-
-class ExpandWeightedTests(unittest.TestCase):
-    def test_weighted_picks_favour_heavier_option(self) -> None:
-        # 19::a vs 1::b — out of 200 trials we expect overwhelmingly "a".
-        # We assert a generous lower bound to avoid flakes while still
-        # catching a literal reversal of the weights.
+    def test_weighted_alternation_favours_heavier(self) -> None:
+        # 19::a vs 1::b — generous threshold to avoid flakes.
         a_count = sum(
-            1 for s in range(200) if expand("{19::a|1::b}", _r(s)) == "a"
+            1 for s in range(200) if expand("[19::a|1::b]", _r(s)) == "a"
         )
         self.assertGreater(a_count, 150)
 
-    def test_weight_with_decimal_parses(self) -> None:
-        # Just check it doesn't raise — output is a single character.
-        out = expand("{1.5::a|0.5::b}", _r(0))
-        self.assertIn(out, {"a", "b"})
 
-    def test_unweighted_options_default_to_one(self) -> None:
-        # Mixing: `{2::a|b}` → b should still appear sometimes (weight 1
-        # vs 2 = 1/3 chance). Quick smoke check across seeds.
-        b_count = sum(1 for s in range(100) if expand("{2::a|b}", _r(s)) == "b")
-        self.assertGreater(b_count, 10)
-        self.assertLess(b_count, 60)
+# ---------- variables ----------
+
+class VariableTests(unittest.TestCase):
+    def test_definition_is_silent(self) -> None:
+        self.assertEqual(expand("${c=red}", _r(0)), "")
+
+    def test_reference_returns_bound_value(self) -> None:
+        self.assertEqual(expand("${c=red}${c}", _r(0)), "red")
+
+    def test_reference_reuses_same_pick_across_references(self) -> None:
+        out = expand("${c=[red|blue]} ${c} ${c} ${c}", _r(0))
+        word = out.strip().split()[0]
+        self.assertEqual(out, f" {word} {word} {word}")
+        self.assertIn(word, {"red", "blue"})
+
+    def test_undefined_reference_raises(self) -> None:
+        with self.assertRaises(DynamicsSyntaxError):
+            expand("hello ${c}", _r(0))
+
+    def test_redefinition_uses_latest_value(self) -> None:
+        self.assertEqual(
+            expand("${c=red}${c}${c=blue}${c}", _r(0)),
+            "redblue",
+        )
+
+    def test_alternation_in_rhs(self) -> None:
+        # `${c=[red|blue]}` — alternation as scalar value. Single pick.
+        seen: set[str] = set()
+        for seed in range(20):
+            seen.add(expand("${c=[red|green|blue]}${c}", _r(seed)))
+        self.assertEqual(seen, {"red", "green", "blue"})
+
+    def test_cross_reference_in_rhs(self) -> None:
+        self.assertEqual(
+            expand("${a=foo}${b=${a}bar}${b}", _r(0)),
+            "foobar",
+        )
 
 
-class ExpandEscapeTests(unittest.TestCase):
+# ---------- composite (object literal) ----------
+
+class CompositeTests(unittest.TestCase):
+    def test_single_field_object(self) -> None:
+        self.assertEqual(
+            expand("${p={hair=long}}${p.hair}", _r(0)),
+            "long",
+        )
+
+    def test_user_example_two_fields(self) -> None:
+        # Exact shape from the redo brief:
+        # `${person={clothes={type=[shorts|skirt]}, hair=[blond|brown]}}`
+        out = expand(
+            "${person={clothes={type=[shorts|skirt]}, hair=[blond|brown]}}"
+            "hair: ${person.hair}, clothes: ${person.clothes.type}",
+            _r(0),
+        )
+        self.assertRegex(
+            out,
+            r"^hair: (blond|brown), clothes: (shorts|skirt)$",
+        )
+
+    def test_nested_composite_flattens(self) -> None:
+        self.assertEqual(
+            expand("${a={b={c=val}}}${a.b.c}", _r(0)),
+            "val",
+        )
+
+    def test_field_value_with_alternation_reaches_all_options(self) -> None:
+        seen: set[str] = set()
+        for seed in range(20):
+            seen.add(expand("${p={c=[red|blue]}}${p.c}", _r(seed)))
+        self.assertEqual(seen, {"red", "blue"})
+
+    def test_field_can_reference_earlier_field(self) -> None:
+        # Left-to-right evaluation — `echo` reads the already-bound `base`.
+        self.assertEqual(
+            expand("${p={base=red, echo=${p.base} shirt}}${p.echo}", _r(0)),
+            "red shirt",
+        )
+
+    def test_flat_dotted_def_equivalent(self) -> None:
+        a = expand("${p.hair=long}${p.hair}", _r(0))
+        b = expand("${p={hair=long}}${p.hair}", _r(0))
+        self.assertEqual(a, b)
+        self.assertEqual(a, "long")
+
+    def test_parent_reference_without_dot_raises(self) -> None:
+        with self.assertRaises(DynamicsSyntaxError):
+            expand("${p={hair=long}}${p}", _r(0))
+
+    def test_missing_field_reference_raises(self) -> None:
+        with self.assertRaises(DynamicsSyntaxError):
+            expand("${p={hair=long}}${p.clothes}", _r(0))
+
+
+# ---------- verbatim ----------
+
+class VerbatimTests(unittest.TestCase):
+    def test_verbatim_def_stores_raw_text(self) -> None:
+        # Definition itself renders to "" (silent, like any var def).
+        self.assertEqual(expand("${tt=`raw text`}", _r(0)), "")
+
+    def test_verbatim_def_then_ref_substitutes_raw_text(self) -> None:
+        # Reference inlines the raw text; for non-dynamics content the
+        # output equals the raw text.
+        self.assertEqual(
+            expand("${tt=`hello world`}-${tt}-", _r(0)),
+            "-hello world-",
+        )
+
+    def test_verbatim_value_with_alternation_is_re_picked_per_ref(self) -> None:
+        # The user's marquee case: each `${tt}` re-rolls because pass 1
+        # substituted raw text and pass 2 sees two independent
+        # alternations.
+        result_pairs: set[tuple[str, str]] = set()
+        for seed in range(40):
+            out = expand(
+                "${tt=`[shorts|skirt]`}First: ${tt}; Second: ${tt}",
+                _r(seed),
+            )
+            # Both picks should appear; verify by collecting their (a,b) tuple.
+            parts = out.replace("First: ", "").split("; Second: ")
+            self.assertEqual(len(parts), 2)
+            result_pairs.add((parts[0], parts[1]))
+        # We should see at least one case where the two picks differ.
+        self.assertTrue(
+            any(a != b for a, b in result_pairs),
+            f"verbatim refs never differed: {result_pairs}",
+        )
+        # All values must be one of the alternation options.
+        for a, b in result_pairs:
+            self.assertIn(a, {"shorts", "skirt"})
+            self.assertIn(b, {"shorts", "skirt"})
+
+    def test_verbatim_def_does_not_consume_rng(self) -> None:
+        # Pass 1 must not touch the RNG, so two equivalent expansions
+        # — one with verbatim plumbing, one without — produce the same
+        # downstream pick from the SAME seed.
+        with_verbatim = expand(
+            "${tt=`[red|blue]`}${tt}", _r(7),
+        )
+        without_verbatim = expand("[red|blue]", _r(7))
+        self.assertEqual(with_verbatim, without_verbatim)
+
+    def test_verbatim_ref_inside_text(self) -> None:
+        # Pass-1 substitution happens inside arbitrary text.
+        self.assertEqual(
+            expand("${color=`red`}A ${color} shirt and a ${color} hat", _r(0)),
+            "A red shirt and a red hat",
+        )
+
+    def test_unclosed_backtick_is_lenient(self) -> None:
+        # Pass 1 leaves it; pass 2 strips the backtick and treats the
+        # rest as literal text rather than blowing up.
+        self.assertEqual(expand("hello `unclosed", _r(0)), "hello unclosed")
+
+    def test_backtick_inside_normal_text_is_stripped(self) -> None:
+        # A `literal` substring renders without the backticks — they're
+        # transparent delimiters. (Useful if a future parser feature
+        # would interpret the content; today it's a no-op.)
+        self.assertEqual(expand("a `b` c", _r(0)), "a b c")
+
+    def test_escaped_backtick_inside_verbatim(self) -> None:
+        # `\\\`` inside a verbatim escapes the backtick, letting raw
+        # content contain literal backticks.
+        self.assertEqual(
+            expand(r"${t=`back\`tick`}${t}", _r(0)),
+            "back`tick",
+        )
+
+
+# ---------- escapes ----------
+
+class EscapeTests(unittest.TestCase):
+    def test_escaped_bracket_is_literal(self) -> None:
+        self.assertEqual(expand(r"\[a|b\]", _r(0)), "[a|b]")
+
+    def test_escaped_dollar_is_literal(self) -> None:
+        # `\$` makes `$` literal; the following `{c}` is just text since
+        # `{` is no longer a Choice opener in the new syntax.
+        self.assertEqual(expand(r"\${c}", _r(0)), "${c}")
+
     def test_escaped_brace_is_literal(self) -> None:
-        self.assertEqual(expand(r"\{a\|b\}", _r(0)), "{a|b}")
+        # `{` and `}` outside an object-literal context render as text;
+        # explicit escape just removes any future ambiguity.
+        self.assertEqual(expand(r"\{ \}", _r(0)), "{ }")
 
-    def test_stray_closing_brace_is_literal(self) -> None:
-        # Lenient policy: `}` outside any open brace renders as itself
-        # so common prompts ("she said hi}") don't need escaping.
-        self.assertEqual(expand("hello } world", _r(0)), "hello } world")
-
-    def test_backslash_at_end_is_literal_backslash(self) -> None:
+    def test_backslash_at_end_is_literal(self) -> None:
         self.assertEqual(expand("end\\", _r(0)), "end\\")
 
 
-class ExpandCommentTests(unittest.TestCase):
+# ---------- comments ----------
+
+class CommentTests(unittest.TestCase):
     def test_comment_stripped_before_parse(self) -> None:
         self.assertEqual(
             expand("hello <!-- note --> world", _r(0)),
             "hello  world",
         )
 
-    def test_comment_can_hide_alternation_syntax(self) -> None:
-        # The `{` inside the comment is invisible to the parser.
+    def test_comment_can_hide_special_syntax(self) -> None:
         self.assertEqual(
-            expand("a <!-- {ignored} --> b", _r(0)),
-            "a  b",
-        )
-
-    def test_multi_line_comment_stripped(self) -> None:
-        self.assertEqual(
-            expand("a <!--\n  line\n  break\n--> b", _r(0)),
+            expand("a <!-- ${ignored} --> b", _r(0)),
             "a  b",
         )
 
 
-class ExpandErrorTests(unittest.TestCase):
-    def test_unclosed_brace_raises_syntax_error(self) -> None:
-        with self.assertRaises(DynamicsSyntaxError) as cm:
-            expand("a {red|blue", _r(0))
-        # Error mentions where the unclosed brace started.
-        self.assertIn("2", str(cm.exception))
+# ---------- error reporting ----------
 
-    def test_unclosed_inner_brace_raises(self) -> None:
+class ErrorTests(unittest.TestCase):
+    def test_unclosed_alternation_raises(self) -> None:
         with self.assertRaises(DynamicsSyntaxError):
-            expand("{a {b|c}", _r(0))
-
-
-class ExpandVariableTests(unittest.TestCase):
-    def test_definition_is_silent_and_reference_renders_value(self) -> None:
-        # Most basic case: define, then reference. The definition site
-        # contributes nothing to the output; the reference contributes
-        # the bound value.
-        self.assertEqual(expand("${c=red}${c}", _r(0)), "red")
-
-    def test_definition_alone_renders_empty(self) -> None:
-        self.assertEqual(expand("${c=red}", _r(0)), "")
-
-    def test_reference_returns_same_value_on_repeat(self) -> None:
-        # `${c}` re-used multiple times must return the SAME value as
-        # the first reference; we pick once, not per reference.
-        out = expand("${c=red|blue} ${c} ${c} ${c}", _r(0))
-        word = out.strip().split()[0]
-        self.assertEqual(out, f" {word} {word} {word}")
-        self.assertIn(word, {"red", "blue"})
-
-    def test_undefined_reference_raises(self) -> None:
-        with self.assertRaises(DynamicsSyntaxError) as cm:
-            expand("hello ${c}", _r(0))
-        self.assertIn("c", str(cm.exception))
-
-    def test_redefinition_uses_latest_value(self) -> None:
-        # Two consecutive bindings; the second wins.
-        self.assertEqual(
-            expand("${c=red}${c}${c=blue}${c}", _r(0)),
-            "redblue",
-        )
-
-    def test_alternation_inside_definition_is_sugar(self) -> None:
-        # Verify `${c=a|b|d}` is equivalent to `${c={a|b|d}}` —
-        # i.e. all three options should be reachable across seeds.
-        seen: set[str] = set()
-        for seed in range(20):
-            seen.add(expand("${c=red|green|blue}${c}", _r(seed)))
-        self.assertEqual(seen, {"red", "green", "blue"})
-
-    def test_weighted_inside_definition_works(self) -> None:
-        # Weighted RHS with the same `2::a` syntax as a Choice.
-        a_count = sum(
-            1
-            for s in range(200)
-            if expand("${c=19::a|1::b}${c}", _r(s)) == "a"
-        )
-        self.assertGreater(a_count, 150)
-
-    def test_nested_choice_inside_definition_works(self) -> None:
-        # `${c={a|b}|d}` — the LHS option is a Choice; the RHS is a
-        # literal. RNG picks one option, then if it's a Choice, picks
-        # within. All three leaf values should be reachable.
-        seen: set[str] = set()
-        for seed in range(30):
-            seen.add(expand("${c={a|b}|d}${c}", _r(seed)))
-        self.assertEqual(seen, {"a", "b", "d"})
-
-    def test_definition_inside_choice_branch(self) -> None:
-        # When the RNG picks a Choice branch that defines a variable,
-        # the binding survives for later references.
-        # When the un-defining branch is picked, the reference must fail.
-        outcomes: set[str] = set()
-        for seed in range(40):
-            try:
-                outcomes.add(expand("{${c=red}|${c=blue}}-${c}", _r(seed)))
-            except DynamicsSyntaxError:  # pragma: no cover - shouldn't happen
-                outcomes.add("ERROR")
-        self.assertEqual(outcomes, {"-red", "-blue"})
-
-    def test_reference_in_branch_without_matching_definition_raises(self) -> None:
-        # Half the seeds pick a branch that defines `c`; the other half
-        # don't. The `${c}` reference outside the choice must fail in
-        # the latter case.
-        errors = 0
-        ok = 0
-        for seed in range(40):
-            try:
-                expand("{a|${c=blue}}-${c}", _r(seed))
-                ok += 1
-            except DynamicsSyntaxError:
-                errors += 1
-        self.assertGreater(errors, 5,
-                           "expected some seeds to hit the undefined branch")
-        self.assertGreater(ok, 5,
-                           "expected some seeds to hit the defining branch")
-
-    def test_cross_reference_in_definition_rhs(self) -> None:
-        # `${b=${a}bar}` — RHS references another variable. As long as
-        # `a` was defined earlier, this works.
-        self.assertEqual(
-            expand("${a=foo}${b=${a}bar}${b}", _r(0)),
-            "foobar",
-        )
-
-    def test_dollar_without_brace_is_literal(self) -> None:
-        # `$5` and `$cost` must not trip the variable parser.
-        self.assertEqual(expand("price: $5.99", _r(0)), "price: $5.99")
-        self.assertEqual(expand("$cost = 10", _r(0)), "$cost = 10")
-
-    def test_escaped_dollar_is_literal(self) -> None:
-        # `\$` makes the `$` literal — but `{c}` after it is then still a
-        # Choice (with one option "c"). So `\${c}` renders as "$c". To
-        # get a fully-literal `${c}` the user escapes all three special
-        # chars: `\$\{c\}`.
-        self.assertEqual(expand(r"\${c}", _r(0)), "$c")
-        self.assertEqual(expand(r"\$\{c\}", _r(0)), "${c}")
+            expand("a [red|blue", _r(0))
 
     def test_unclosed_var_raises(self) -> None:
         with self.assertRaises(DynamicsSyntaxError):
             expand("${color=red", _r(0))
 
+    def test_unclosed_object_literal_raises(self) -> None:
+        with self.assertRaises(DynamicsSyntaxError):
+            expand("${p={hair=long, clothes=red", _r(0))
+
     def test_invalid_var_name_raises(self) -> None:
-        # Names must start with a letter or `_`.
         with self.assertRaises(DynamicsSyntaxError):
             expand("${1=red}", _r(0))
 
-    def test_fresh_env_per_expand_call(self) -> None:
-        # Two separate expand() calls share no state.
-        rng = _r(0)
-        expand("${c=red}", rng)
+
+# ---------- validate ----------
+
+class ValidateTests(unittest.TestCase):
+    def test_validate_noop_for_plain_text(self) -> None:
+        validate("hello world")  # should not raise
+
+    def test_validate_passes_on_good_template(self) -> None:
+        validate("${c=red}${c} [a|b|c]")  # should not raise
+
+    def test_validate_raises_on_bad_template(self) -> None:
         with self.assertRaises(DynamicsSyntaxError):
-            expand("${c}", rng)
-
-    def test_empty_definition_binds_empty_string(self) -> None:
-        self.assertEqual(expand("[${c=}]${c}", _r(0)), "[]")
+            validate("${unclosed")
 
 
-class ExpandCompositeTests(unittest.TestCase):
-    """Object-literal composite variables — `${obj={k=v}, {k=v}}` form."""
+# ---------- integration (realistic prompts) ----------
 
-    def test_single_field_object_binds_dotted_path(self) -> None:
-        # `${p={hair=long}}${p.hair}` should render "long".
-        self.assertEqual(expand("${p={hair=long}}${p.hair}", _r(0)), "long")
-
-    def test_object_definition_is_silent(self) -> None:
-        # Like regular var defs, the definition site renders to "".
-        self.assertEqual(expand("${p={hair=long}}", _r(0)), "")
-
-    def test_multiple_fields_user_example(self) -> None:
-        # The exact syntax from the user's request:
-        # `${personA={hair=long|short}, {clothes=red|blue}}${personA.hair}`
+class IntegrationTests(unittest.TestCase):
+    def test_typical_outfit_prompt(self) -> None:
         out = expand(
-            "${p={hair=long|short}, {clothes=red|blue}}"
-            "${p.hair} hair, ${p.clothes} clothes",
-            _r(0),
+            "${person={clothes={type=[shorts|skirt]}, hair=[blond|brown]}}"
+            "a ${person.hair}-haired girl wearing ${person.clothes.type}",
+            _r(3),
         )
-        # The values came from the seeded RNG; we don't pin them, but
-        # both colours and both lengths should be reachable across seeds.
-        self.assertIn(out.split(" hair")[0], {"long", "short"})
-        self.assertIn(out.split("clothes")[0].split(", ")[1].strip(),
-                      {"red", "blue"})
+        self.assertRegex(
+            out, r"^a (blond|brown)-haired girl wearing (shorts|skirt)$",
+        )
 
-    def test_redefinition_within_object_uses_latest(self) -> None:
-        # Object literal with the same field twice → latest wins, same
-        # rule as scalar VarDef redefinition.
+    def test_verbatim_template_for_two_people(self) -> None:
+        # User's marquee case: two independent picks for two characters
+        # from one verbatim definition.
+        out = expand(
+            "${outfit=`[shorts|skirt]`}"
+            "first wears ${outfit}, second wears ${outfit}",
+            _r(11),
+        )
+        # Both picks valid; might be same or different.
+        for token in ("first wears", "second wears"):
+            self.assertIn(token, out)
+        choices = {"shorts", "skirt"}
+        first_pick = out.split("first wears ")[1].split(",")[0]
+        second_pick = out.split("second wears ")[1].strip()
+        self.assertIn(first_pick, choices)
+        self.assertIn(second_pick, choices)
+
+    def test_compel_negative_weighting_passes_through(self) -> None:
+        # Real-world prompt that uses compel `[word]-` — must NOT be
+        # interpreted as alternation. The output should preserve the
+        # brackets so the SDXL pipeline's compel pass can read them.
         self.assertEqual(
-            expand("${p={hair=long}, {hair=short}}${p.hair}", _r(0)),
-            "short",
+            expand("a [bad anatomy]- (masterpiece:1.2) cat", _r(0)),
+            "a [bad anatomy]- (masterpiece:1.2) cat",
         )
-
-    def test_nested_object_literal_flattens(self) -> None:
-        # `${p={outfit={shirt=red}}}` binds `p.outfit.shirt`. We can
-        # reach it with a dotted reference.
-        self.assertEqual(
-            expand("${p={outfit={shirt=red}}}${p.outfit.shirt}", _r(0)),
-            "red",
-        )
-
-    def test_three_levels_of_nesting(self) -> None:
-        self.assertEqual(
-            expand(
-                "${a={b={c={d=value}}}}${a.b.c.d}",
-                _r(0),
-            ),
-            "value",
-        )
-
-    def test_field_value_with_alternation(self) -> None:
-        # Each field value still supports `|` implicit alternation.
-        # Run across seeds and verify both options are reachable.
-        seen: set[str] = set()
-        for seed in range(20):
-            seen.add(expand("${p={c=red|blue}}${p.c}", _r(seed)))
-        self.assertEqual(seen, {"red", "blue"})
-
-    def test_field_can_reference_earlier_field(self) -> None:
-        # Bindings within one MultiVarDef are evaluated left-to-right,
-        # so a later field can reference an earlier one.
-        self.assertEqual(
-            expand("${p={base=red}, {echo=${p.base} shirt}}${p.echo}", _r(0)),
-            "red shirt",
-        )
-
-    def test_flat_dotted_def_works_directly(self) -> None:
-        # `${a.b=...}` should be equivalent to `${a={b=...}}` — same
-        # env key. The composite syntax is just one way to spell it.
-        self.assertEqual(
-            expand("${p.hair=long}${p.hair}", _r(0)),
-            "long",
-        )
-
-    def test_reference_to_parent_without_dot_raises(self) -> None:
-        # `${p}` where only `p.hair` was bound → no such key.
-        with self.assertRaises(DynamicsSyntaxError):
-            expand("${p={hair=long}}${p}", _r(0))
-
-    def test_reference_to_missing_field_raises(self) -> None:
-        with self.assertRaises(DynamicsSyntaxError):
-            expand("${p={hair=long}}${p.clothes}", _r(0))
-
-    def test_brace_choice_in_rhs_stays_a_choice(self) -> None:
-        # `${color={red|blue}}` — the inner block has no `=`, so it's a
-        # regular Choice, not an object literal. The whole thing reduces
-        # to a scalar definition.
-        seen: set[str] = set()
-        for seed in range(10):
-            seen.add(expand("${color={red|blue}}${color}", _r(seed)))
-        self.assertEqual(seen, {"red", "blue"})
-
-    def test_whitespace_around_comma_and_braces_tolerated(self) -> None:
-        # `,` is the field separator; optional whitespace around it.
-        self.assertEqual(
-            expand(
-                "${p={hair=long} , {clothes=red}}"
-                "${p.hair} / ${p.clothes}",
-                _r(0),
-            ),
-            "long / red",
-        )
-
-    def test_object_inside_choice_branch(self) -> None:
-        # When a Choice picks the branch that defines the object, the
-        # binding is visible afterwards. The undefining branch makes
-        # the reference fail at expansion time — same rule as scalar.
-        outcomes: set[str] = set()
-        for seed in range(40):
-            try:
-                outcomes.add(
-                    expand(
-                        "{${p={c=red}}|${p={c=blue}}} -> ${p.c}",
-                        _r(seed),
-                    ),
-                )
-            except DynamicsSyntaxError:
-                outcomes.add("ERROR")
-        # Both branches define p.c, so we never hit the error path —
-        # we should see both possible expansions.
-        self.assertEqual(outcomes, {" -> red", " -> blue"})
-
-    def test_malformed_field_block_missing_equals_raises(self) -> None:
-        # `{hair}` looks like a Choice (no `=`), so the parser stays
-        # in scalar mode and the outer block is just `${p={hair}}` —
-        # a regular scalar def. Not malformed.
-        # Truly malformed: `${p={hair}, {clothes=red}}` would be ambiguous.
-        # Per our rule, the first block decides the mode. `{hair}` has
-        # no `=` so we're in scalar mode; the comma then becomes part
-        # of the scalar value. We accept that as well-defined.
-        out = expand("${p={hair}}${p}", _r(0))
-        self.assertEqual(out, "hair")
-
-    def test_unclosed_object_literal_raises(self) -> None:
-        with self.assertRaises(DynamicsSyntaxError):
-            expand("${p={hair=long}, {clothes=red}", _r(0))
-
-
-class ExpandIntegrationTests(unittest.TestCase):
-    """Realistic prompts the user might type."""
-
-    def test_typical_hair_color_prompt(self) -> None:
-        results: set[str] = set()
-        for seed in range(30):
-            out = expand("girl with {red|green|blue} hair", _r(seed))
-            results.add(out)
-        self.assertEqual(
-            results,
-            {
-                "girl with red hair",
-                "girl with green hair",
-                "girl with blue hair",
-            },
-        )
-
-    def test_score_tags_in_template_pass_through(self) -> None:
-        # A literal `:` in the prompt (e.g. score_9 tags) shouldn't trip
-        # the weight parser, because weight matching is anchored at the
-        # start of an option and needs `::` not `:`.
-        out = expand("score_9:1.2, {red|blue}", _r(7))
-        self.assertTrue(out.startswith("score_9:1.2, "))
-        self.assertIn(out.split(", ")[1], {"red", "blue"})
 
 
 if __name__ == "__main__":

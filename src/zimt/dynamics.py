@@ -1,54 +1,49 @@
-"""Dynamic prompt syntax — A1111/ComfyUI-style alternation and friends.
+"""Dynamic prompt syntax — JSON-like with two-pass verbatim expansion.
 
 Syntax
 ------
-``{a|b|c}``                   alternation: pick one option uniformly
-``{2::a|1::b}``               weighted alternation: 2/3 a, 1/3 b
-``{a {b|c}|d}``               nesting: choices nest to any depth
-``{|a|b}``                    empty option allowed → "", "a", or "b"
-``${name=expr}``              variable: pick once, bind to ``name``, render nothing
-``${name}``                   variable reference: render the bound value
-``${obj={k1=v1}, {k2=v2}}``   composite variable: each field binds at ``obj.k1`` etc.
-``${obj.k1}``                 access a composite field
-``\\{ \\| \\$``               backslash-escape for literal braces / pipe / dollar
-``<!-- foo -->``              HTML-style comments stripped before parsing
+``[a|b|c]``                   alternation: pick one option uniformly
+``[2::a|1::b]``               weighted alternation: 2/3 a, 1/3 b
+``[a [b|c]|d]``               nesting (alternations nest to any depth)
+``[|a|b]``                    empty option allowed → "", "a", or "b"
+``${name=value}``             scalar variable definition (silent)
+``${name}``                   variable reference (renders bound value)
+``${obj={k1=v1, k2=v2}}``     composite definition; binds ``obj.k1`` etc.
+``${obj.k1}``                 access a composite field (nested OK: ``obj.a.b``)
+```${name=`raw text`}```      verbatim definition — value stored as raw
+                              text, re-parsed when referenced (see below)
+``\\[ \\] \\{ \\} \\| \\$ \\` \\\\``  escape literals
+``<!-- foo -->``              HTML-style comment, stripped before parsing
 
-Variables bind silently — the definition site itself renders to "" so the
-prompt reads cleanly when you don't want to display the chosen value
-inline. To show the value where you define it, follow with a reference:
-``${color=red|green}${color} hair``. References are scoped to one
-``expand()`` call; nothing leaks between successive generations.
+Alternation lookahead
+---------------------
+``[...]`` is parsed as alternation only when a top-level ``|`` appears
+between the matched brackets. ``[word]`` stays literal text — that
+matters because compel's negative-weighting syntax (``[word]-``) needs
+to survive dynamics expansion unchanged. To get a literal ``|``-bearing
+bracket pair (``[a|b]`` typed verbatim), escape with ``\\[`` ``\\]``.
 
-Inside ``${name=...}``, ``|`` is sugar for an implicit choice — so
-``${color=red|green|blue}`` is equivalent to ``${color={red|green|blue}}``.
-Forward references and references to a variable that wasn't defined
-along the actually-chosen branch raise :class:`DynamicsSyntaxError` at
-render time.
+Two-pass expansion
+------------------
+**Pass 1 — verbatim preprocessor.** A text-level scan finds every
+``${name=`...`}`` definition, stores the raw inner text in an env, and
+removes the definition from the text. Every ``${name}`` reference is
+then substituted with the env value IF that name was bound to a
+verbatim. Non-verbatim ``${...}`` constructs (``${color=red|blue}``,
+``${obj={...}}``, references to non-verbatim names) pass through pass 1
+unchanged. Pass 1 does **not** consume any RNG — it never picks an
+alternation.
 
-Composite variables
--------------------
-``${person={hair=long|short}, {clothes=red|blue}}`` binds two keys,
-``person.hair`` and ``person.clothes``, each evaluated independently
-from the same RNG stream. Fields nest arbitrarily — a field value can
-itself be another ``{name=value}, {name=value}`` object literal — and
-the flat-dotted equivalent ``${person.hair=long|short}`` works too.
+**Pass 2 — full evaluator.** The pass-1 output is parsed and rendered
+with the RNG. Each ``${name=...}`` definition is evaluated and bound;
+``${name}`` references resolve from a fresh env; ``[...]`` alternations
+pick using the RNG. Verbatim substitutions from pass 1 are now part of
+the source text, so each reference site to a verbatim variable
+RE-EVALUATES its inlined contents — meaning two references to
+```${tt=`[shorts|skirt]`}``` produce two independent picks.
 
-Storage is flat: ``env`` holds ``"person.hair"`` and ``"person.clothes"``
-as separate keys. ``${person}`` (no dot) raises like any other
-undefined variable — composite parents don't render as scalars.
-
-Determinism
------------
-Every expansion runs against a caller-supplied :class:`random.Random`,
-so a fixed seed always yields the same expansion. The image generator
-uses its own :class:`torch.Generator`; the two RNG streams are independent
-so template determinism and image-sampling determinism don't interfere
-with each other.
-
-Wired into :func:`zimt.generate.generate` after the seed is picked and
-before :func:`zimt.generate.compose_prompt` prepends any score-tag
-prefix — so the model's score tags themselves never get
-template-expanded by accident.
+Both passes are deterministic per seed: the RNG state is fresh for
+pass 2 (pass 1 never touches it).
 """
 
 from __future__ import annotations
@@ -59,125 +54,285 @@ from dataclasses import dataclass
 
 _COMMENT_RE = re.compile(r"<!--.*?-->", flags=re.DOTALL)
 _WEIGHT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*::")
-# Variable names can include `.` so flat-dotted forms like ``${a.b=...}``
-# and references like ``${a.b.c}`` work alongside the composite-literal
-# syntax. The first character must still be a letter or underscore.
+# Variable / reference names — dots allowed for flat-dotted refs and
+# composite-field access. First char must be a letter or underscore.
 _VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
-# Field names inside ``{name=value}`` object-literal blocks. No dots —
-# the dotted path is built by combining the outer name with the field
-# name at parse time.
+# Field names inside object literals — same as var names but no dots
+# (the dotted path is constructed at parse time from the surrounding
+# composite definition's name).
 _FIELD_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class DynamicsSyntaxError(ValueError):
-    """User typed a malformed template (unclosed ``{``, etc.)."""
+    """User typed a malformed template (unclosed bracket, undefined ref, ...)."""
 
+
+# ---------- AST nodes ----------
 
 @dataclass(frozen=True)
 class Literal:
-    """A run of literal text with no choices in it."""
+    """A run of literal text."""
     text: str
 
 
 @dataclass(frozen=True)
 class Option:
-    """One branch of a :class:`Choice`. ``weight`` defaults to 1.0."""
+    """One branch of an :class:`Alternation`. ``weight`` defaults to 1.0."""
     weight: float
     parts: tuple["Node", ...]
 
 
 @dataclass(frozen=True)
-class Choice:
-    """An alternation. ``options`` may be empty (renders to "")."""
+class Alternation:
+    """``[a|b]`` — picked uniformly (or by weights) at render time."""
     options: tuple[Option, ...]
 
 
 @dataclass(frozen=True)
+class VarRef:
+    """``${name}`` — renders the value bound to ``name`` (env lookup)."""
+    name: str
+
+
+@dataclass(frozen=True)
 class VarDef:
-    """``${name=expr}`` — bind ``name`` to the rendered ``parts``. Renders ""."""
+    """``${name=value}`` — silent; binds ``name`` to the rendered RHS."""
     name: str
     parts: tuple["Node", ...]
 
 
 @dataclass(frozen=True)
-class VarRef:
-    """``${name}`` — render the value previously bound to ``name``."""
-    name: str
-
-
-@dataclass(frozen=True)
 class MultiVarDef:
-    """``${obj={k1=v1}, {k2=v2}}`` — emit multiple flat-dotted bindings.
+    """``${obj={k=v, k=v}}`` — flat-dotted bindings from one block.
 
-    The object-literal syntax is parser-only sugar; at the AST level we
-    just have an ordered sequence of ``(full_dotted_name, value_parts)``
-    pairs that bind in order against the shared env. Each binding is
-    silent like a regular :class:`VarDef`.
-
-    Nested object literals (``${a={b={c=...}}}``) flatten during parse
-    into deeper dotted paths, so the AST stays shallow no matter how
-    nested the syntactic form is.
+    Built at parse time by flattening composite literals into individual
+    ``(name.field, parts)`` pairs. Renders silently, binding each pair
+    against the shared env in source order.
     """
     bindings: tuple[tuple[str, tuple["Node", ...]], ...]
 
 
-Node = Literal | Choice | VarDef | VarRef | MultiVarDef
+Node = Literal | Alternation | VarRef | VarDef | MultiVarDef
+
+
+# ---------- public API ----------
+
+def has_dynamics(text: str) -> bool:
+    """Cheap precheck: does this text contain any of the special syntax?
+
+    Used to skip both passes for plain prompts. Conservative — false
+    positives (e.g. a stray ``[`` that doesn't pair up) just cause the
+    parser to run and find no alternations. Backslashes count because
+    even a plain text prompt with ``\\X`` escape sequences needs the
+    parser pass to materialise them.
+    """
+    if "${" in text or "<!--" in text or "`" in text or "\\" in text:
+        return True
+    if "[" in text and "|" in text:
+        return True
+    return False
 
 
 def validate(text: str) -> None:
     """Parse ``text`` and raise :class:`DynamicsSyntaxError` if malformed.
 
-    Used by callers that want to surface a template error once at
-    submission time rather than once per ``/many`` iteration. The parser
-    output is discarded; rendering is not performed.
+    Sacrificial render with a fixed seed proves syntactic validity
+    without exposing AST internals. Used at submission time to
+    surface a template error once rather than once per ``/many`` job.
     """
     if not has_dynamics(text):
         return
-    # Parsing and rendering share the same code path, so a sacrificial
-    # render with a fixed seed proves syntactic validity without leaking
-    # implementation details about the AST.
     expand(text, random.Random(0))
 
 
-def has_dynamics(text: str) -> bool:
-    """Cheap pre-check: does this text plausibly contain template syntax?
-
-    Used to skip parsing for the common case of a literal prompt. Returns
-    True conservatively — a ``{`` inside a comment still triggers parsing,
-    which then strips the comment correctly anyway.
-    """
-    return "{" in text or "<!--" in text
-
-
 def expand(text: str, rng: random.Random) -> str:
-    """Parse ``text`` and render one expansion using ``rng``.
+    """Two-pass expand: verbatim preprocessor → full evaluator.
 
-    Raises :class:`DynamicsSyntaxError` for malformed templates (unclosed
-    brace, undefined variable, ...). The function is pure — same ``text``
-    + same RNG state yields the same string. The variable environment is
-    fresh per call; nothing leaks between successive ``expand()``s.
+    The function is pure — same ``text`` + same RNG state yields the
+    same output. Pass 1 doesn't touch the RNG; pass 2 consumes from it
+    deterministically. The env is fresh per call; nothing leaks between
+    successive ``expand()`` invocations.
     """
     stripped = _COMMENT_RE.sub("", text)
-    ast, end = _parse_seq(stripped, 0, until_chars="")
-    if end != len(stripped):
-        # Defensive: _parse_seq with empty boundary should consume
-        # everything. A residual position means an internal bug, not a
-        # user-input issue.
+    pass1 = _pass1_verbatim(stripped)
+    if pass1 == stripped and not has_dynamics(pass1):
+        # Nothing to evaluate — pass 1 produced no changes and there's
+        # no remaining dynamics syntax. Common-case fast path.
+        return pass1
+    ast, end = _parse_top(pass1, 0)
+    if end != len(pass1):
+        # Defensive — _parse_top with empty boundary should consume
+        # everything. A residual position means an internal bug.
         raise DynamicsSyntaxError(
-            f"internal: residual input at {end}/{len(stripped)}"
+            f"internal: residual input at {end}/{len(pass1)}"
         )
     return _render(ast, rng, env={})
 
 
-def _parse_seq(
-    s: str, i: int, until_chars: str
-) -> tuple[tuple[Node, ...], int]:
-    """Parse a flat sequence of literals + choices until end or boundary.
+# ---------- pass 1: verbatim preprocessor ----------
 
-    Returns (ast, position) where ``position`` is the index of the
-    terminating character (still unconsumed) or ``len(s)``. ``until_chars``
-    is the set of characters that end the sequence (``"|}"`` inside a
-    choice; ``""`` at the top level).
+def _pass1_verbatim(text: str) -> str:
+    """Substitute every ``${name=`raw`}`` def and every ``${name}`` ref
+    that resolves to a verbatim binding. Everything else passes through
+    unchanged so pass 2's full parser sees it as the user typed.
+
+    No alternation picking happens here — pass 1 is RNG-free and
+    semantically a textual transform.
+    """
+    env: dict[str, str] = {}
+    out: list[str] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            # Preserve escape so pass 2 sees it.
+            if i + 1 < n:
+                out.append(text[i:i + 2])
+                i += 2
+            else:
+                out.append("\\")
+                i += 1
+            continue
+        if c == "`":
+            # Standalone backtick (outside ${name=...}) — strip the
+            # delimiters and pass the content through. Unclosed: treat
+            # the rest as raw and drop the leading backtick (lenient,
+            # avoids a hard error on a typo).
+            end = _find_verbatim_end(text, i + 1)
+            if end < 0:
+                out.append(text[i + 1:])
+                break
+            out.append(text[i + 1:end])
+            i = end + 1
+            continue
+        if c == "$" and i + 1 < n and text[i + 1] == "{":
+            close = _find_var_close(text, i)
+            if close < 0:
+                # Unclosed ${...} — let pass 2 report a useful error.
+                out.append(text[i:])
+                break
+            body = text[i + 2:close]
+            replacement, consumed = _pass1_handle_var_body(body, env)
+            if consumed:
+                out.append(replacement)
+                i = close + 1
+                continue
+            # Non-verbatim def / unbindable ref — leave untouched for pass 2.
+            out.append(text[i:close + 1])
+            i = close + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _find_verbatim_end(text: str, start: int) -> int:
+    """Find the next un-escaped backtick at or after ``start``. -1 if none."""
+    i = start
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and i + 1 < len(text):
+            i += 2
+            continue
+        if c == "`":
+            return i
+        i += 1
+    return -1
+
+
+def _find_var_close(text: str, start: int) -> int:
+    """Given ``start`` pointing at ``$`` of a ``${...}`` block, return the
+    position of the matching ``}``. Accounts for nested ``${...}``,
+    object-literal ``{...}``, backtick-quoted verbatim, and escapes.
+    Returns -1 if unmatched.
+    """
+    i = start + 2  # past `${`
+    depth = 0  # nested `{` depth WITHIN the outer ${...}
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and i + 1 < len(text):
+            i += 2
+            continue
+        if c == "`":
+            end = _find_verbatim_end(text, i + 1)
+            if end < 0:
+                return -1
+            i = end + 1
+            continue
+        if c == "$" and i + 1 < len(text) and text[i + 1] == "{":
+            nested = _find_var_close(text, i)
+            if nested < 0:
+                return -1
+            i = nested + 1
+            continue
+        if c == "{":
+            depth += 1
+            i += 1
+        elif c == "}":
+            if depth == 0:
+                return i
+            depth -= 1
+            i += 1
+        else:
+            i += 1
+    return -1
+
+
+_PASS1_VERBATIM_DEF = re.compile(
+    r"\s*([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*`",
+)
+_PASS1_REF_ONLY = re.compile(
+    r"\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\Z",
+)
+
+
+def _pass1_handle_var_body(
+    body: str, env: dict[str, str],
+) -> tuple[str, bool]:
+    """Decide what to do with the contents of a ``${...}`` block.
+
+    Returns ``(replacement, consumed)``:
+      * verbatim def — register env, return ("", True) so the block is
+        removed from the text.
+      * ref to a name with a verbatim binding — return (raw_value, True).
+      * anything else (non-verbatim def, ref to undefined / non-verbatim,
+        composite def, scalar def with regular RHS) — return ("", False)
+        so the caller keeps the block intact for pass 2.
+    """
+    m = _PASS1_VERBATIM_DEF.match(body)
+    if m is not None:
+        # Looks like `name = ` followed by an opening backtick. The body
+        # MUST then be: name=`...raw...` with optional trailing ws.
+        name = m.group(1)
+        verb_start = m.end()  # just past the opening backtick
+        # Find the closing backtick. The content runs until the last
+        # un-escaped backtick; trailing chars after it would mean the
+        # body wasn't a pure verbatim def, so we hand it back to pass 2.
+        end = _find_verbatim_end(body, verb_start)
+        if end < 0:
+            return "", False
+        trailing = body[end + 1:].strip()
+        if trailing != "":
+            return "", False
+        env[name] = body[verb_start:end]
+        return "", True
+    m = _PASS1_REF_ONLY.match(body)
+    if m is not None:
+        name = m.group(1)
+        if name in env:
+            return env[name], True
+    return "", False
+
+
+# ---------- pass 2: full parser ----------
+
+def _parse_top(s: str, i: int, until_chars: str = "") -> tuple[tuple[Node, ...], int]:
+    """Parse a flat sequence of literals + alternations + var blocks.
+
+    ``until_chars`` is the set of characters that end the sequence
+    (``"|]"`` inside an alternation option; ``",}"`` inside a scalar
+    field value; empty at top level).
     """
     parts: list[Node] = []
     buf: list[str] = []
@@ -187,69 +342,147 @@ def _parse_seq(
         if c in until_chars:
             break
         if c == "\\":
-            # Backslash escapes the next char (any char). At end of string
-            # a trailing backslash is a literal backslash.
             if i + 1 < n:
                 buf.append(s[i + 1])
                 i += 2
             else:
                 buf.append("\\")
                 i += 1
-        elif c == "$" and i + 1 < n and s[i + 1] == "{":
-            # Variable definition or reference. Plain `$` (not followed
-            # by `{`) is literal so prices and shell-like syntax survive.
+            continue
+        if c == "`":
+            # Pass-1 already stripped verbatim defs / refs. A remaining
+            # backtick is just a literal delimiter — strip it and emit
+            # the content. Same lenient policy on unclosed as pass 1:
+            # drop the leading backtick, treat the rest as literal text.
+            end = _find_verbatim_end(s, i + 1)
+            if end < 0:
+                buf.append(s[i + 1:])
+                i = n
+                continue
+            buf.append(s[i + 1:end])
+            i = end + 1
+            continue
+        if c == "$" and i + 1 < n and s[i + 1] == "{":
             if buf:
                 parts.append(Literal("".join(buf)))
                 buf.clear()
             node, i = _parse_var(s, i + 2, open_pos=i)
             parts.append(node)
-        elif c == "{":
-            if buf:
-                parts.append(Literal("".join(buf)))
-                buf.clear()
-            choice, i = _parse_choice(s, i + 1, open_pos=i)
-            parts.append(choice)
-        elif c == "}":
-            # Stray `}` outside a choice. Be lenient — treat as literal.
-            # Prompts naturally contain `}` ("she said {hello|hi} to him.
-            # also: }}}"), and forcing escapes here annoys users.
-            buf.append("}")
+            continue
+        if c == "[":
+            # Alternation? Only when a top-level `|` exists between this
+            # `[` and its matching `]`. Otherwise it's literal — compel
+            # weighting like `[word]-` survives this parser intact.
+            close_pos, has_pipe = _check_alternation(s, i)
+            if close_pos > 0 and has_pipe:
+                if buf:
+                    parts.append(Literal("".join(buf)))
+                    buf.clear()
+                alt, i = _parse_alternation(s, i + 1, open_pos=i)
+                parts.append(alt)
+                continue
+            if has_pipe and close_pos < 0:
+                # User typed something like `[red|blue` — the pipe shows
+                # intent to write an alternation, the missing `]` is a
+                # typo. Silent fallthrough would hide the mistake;
+                # report it clearly.
+                raise DynamicsSyntaxError(
+                    f"unclosed '[' alternation at position {i}"
+                )
+            buf.append("[")
             i += 1
-        else:
-            buf.append(c)
-            i += 1
+            continue
+        buf.append(c)
+        i += 1
     if buf:
         parts.append(Literal("".join(buf)))
     return tuple(parts), i
 
 
-def _parse_choice(s: str, i: int, *, open_pos: int) -> tuple[Choice, int]:
-    """Parse the body of a ``{...}`` starting just after the opening brace."""
+def _check_alternation(s: str, start: int) -> tuple[int, bool]:
+    """Look ahead from ``start`` (the ``[`` char) for the matching ``]``.
+
+    Returns ``(close_pos, has_pipe)`` — ``close_pos == -1`` for
+    unmatched, ``has_pipe`` indicates whether at least one top-level
+    ``|`` exists between the brackets. Both checks happen in one scan
+    so the parser can decide alternation-vs-literal cheaply.
+    """
+    n = len(s)
+    if start >= n or s[start] != "[":
+        return -1, False
+    i = start + 1
+    depth = 1
+    has_pipe = False
+    while i < n:
+        c = s[i]
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == "`":
+            end = _find_verbatim_end(s, i + 1)
+            if end < 0:
+                return -1, False
+            i = end + 1
+            continue
+        if c == "$" and i + 1 < n and s[i + 1] == "{":
+            close = _find_var_close(s, i)
+            if close < 0:
+                return -1, False
+            i = close + 1
+            continue
+        if c == "[":
+            depth += 1
+            i += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return i, has_pipe
+            i += 1
+        elif c == "|" and depth == 1:
+            has_pipe = True
+            i += 1
+        else:
+            i += 1
+    # Unmatched — preserve the has_pipe signal so the caller can
+    # distinguish "literal `[` typo'd `]`" from "user clearly meant
+    # alternation but forgot the closing bracket".
+    return -1, has_pipe
+
+
+def _parse_alternation(s: str, i: int, *, open_pos: int) -> tuple[Alternation, int]:
+    """Parse the body of a ``[...]`` starting just past the opening bracket."""
     options: list[Option] = []
     while True:
         weight, i = _parse_weight(s, i)
-        parts, i = _parse_seq(s, i, until_chars="|}")
+        parts, i = _parse_top(s, i, until_chars="|]")
         options.append(Option(weight, parts))
         if i >= len(s):
             raise DynamicsSyntaxError(
-                f"unclosed '{{' starting at position {open_pos}"
+                f"unclosed '[' starting at position {open_pos}"
             )
-        if s[i] == "}":
-            return Choice(tuple(options)), i + 1
-        # s[i] is '|' — consume separator, continue with the next option.
-        i += 1
+        if s[i] == "]":
+            return Alternation(tuple(options)), i + 1
+        i += 1  # consume '|'
+
+
+def _parse_weight(s: str, i: int) -> tuple[float, int]:
+    """Look for a ``<number>::`` prefix at position ``i``. Default 1.0."""
+    m = _WEIGHT_RE.match(s, i)
+    if m is None:
+        return 1.0, i
+    return float(m.group(1)), m.end()
 
 
 def _parse_var(s: str, i: int, *, open_pos: int) -> tuple[Node, int]:
-    """Parse the body of a ``${...}`` starting just after the ``${``.
+    """Parse the body of a ``${...}`` starting just past the ``${``.
 
     Three shapes:
-      * ``${name}``                   — reference. Returns :class:`VarRef`.
-      * ``${name=<expr>}``           — scalar definition. ``|`` inside the
-        RHS is implicit choice sugar.
-      * ``${name={k=v}, {k=v}, ...}`` — composite definition. Each field
-        binds at the flat-dotted path ``name.k``; nested object literals
-        flatten further. Returns :class:`MultiVarDef`.
+      * ``${name}``                 — reference. Returns :class:`VarRef`.
+      * ``${name=<expr>}``         — scalar def. Returns :class:`VarDef`.
+      * ``${name={k=v, k=v}}``     — composite def. Returns
+                                      :class:`MultiVarDef` with the
+                                      object literal flattened to flat
+                                      dotted bindings.
     """
     m = _VAR_NAME_RE.match(s, i)
     if m is None:
@@ -269,19 +502,15 @@ def _parse_var(s: str, i: int, *, open_pos: int) -> tuple[Node, int]:
             f"expected '=' or '}}' after variable {name!r} at position {open_pos}"
         )
     i += 1  # consume '='
-    # Composite ahead? Detect by peeking — the first non-whitespace must
-    # be ``{name=`` for object-literal mode. A bare ``{`` without an
-    # equals inside is still a regular Choice in scalar mode.
-    if _looks_like_object_literal(s, i):
-        bindings, i = _parse_object_literal_body(s, i, prefix=name, open_pos=open_pos)
+    if _is_object_literal(s, i):
+        bindings, i = _parse_object_literal(s, i, prefix=name, open_pos=open_pos)
         i = _skip_ws(s, i)
         if i >= len(s) or s[i] != "}":
             raise DynamicsSyntaxError(
                 f"unclosed '${{' at position {open_pos}"
             )
         return MultiVarDef(tuple(bindings)), i + 1
-    # Scalar definition — `|` in RHS is implicit Choice sugar.
-    parts, i = _parse_scalar_rhs(s, i, until_chars="}", open_pos=open_pos)
+    parts, i = _parse_top(s, i, until_chars="}")
     if i >= len(s) or s[i] != "}":
         raise DynamicsSyntaxError(
             f"unclosed '${{' at position {open_pos}"
@@ -289,19 +518,8 @@ def _parse_var(s: str, i: int, *, open_pos: int) -> tuple[Node, int]:
     return VarDef(name, parts), i + 1
 
 
-def _skip_ws(s: str, i: int) -> int:
-    while i < len(s) and s[i] in " \t\n\r":
-        i += 1
-    return i
-
-
-def _looks_like_object_literal(s: str, i: int) -> bool:
-    """Lookahead: does the value at ``s[i:]`` start with a field block?
-
-    A field block is ``{<ident>=...}`` — the presence of ``=`` after the
-    opening ``{`` and an identifier is the distinguishing signal. Any
-    other shape (bare alternation ``{a|b}``, literal text) is scalar.
-    """
+def _is_object_literal(s: str, i: int) -> bool:
+    """Peek: does ``s[i:]`` start with ``{<ident>=`` (an object literal)?"""
     j = _skip_ws(s, i)
     if j >= len(s) or s[j] != "{":
         return False
@@ -313,27 +531,35 @@ def _looks_like_object_literal(s: str, i: int) -> bool:
     return j < len(s) and s[j] == "="
 
 
-def _parse_object_literal_body(
+def _parse_object_literal(
     s: str, i: int, *, prefix: str, open_pos: int,
 ) -> tuple[list[tuple[str, tuple[Node, ...]]], int]:
-    """Parse ``{k1=v1}, {k2=v2}, ...`` and return flat bindings.
+    """Parse ``{k1=v1, k2=v2, ...}`` and return flat bindings.
 
-    Each block's value is itself parsed in RHS mode, so it can be either
-    a scalar (with ``|`` alternation) or another nested object literal.
-    The returned bindings list is flat: nested objects' field paths are
-    already joined with the parent prefix.
+    Each value is parsed as a scalar RHS (recursing into nested object
+    literals if the value itself looks like one). Field-paths are
+    joined with ``.`` so a binding's full name reflects its position in
+    the source tree.
     """
+    i = _skip_ws(s, i)
+    if i >= len(s) or s[i] != "{":
+        raise DynamicsSyntaxError(
+            f"expected '{{' for object literal at position {i}"
+        )
+    i += 1  # consume '{'
     bindings: list[tuple[str, tuple[Node, ...]]] = []
     while True:
         i = _skip_ws(s, i)
-        if i >= len(s) or s[i] != "{":
-            return bindings, i
-        i += 1  # consume '{'
-        i = _skip_ws(s, i)
+        if i >= len(s):
+            raise DynamicsSyntaxError(
+                f"unclosed object literal opened at {open_pos}"
+            )
+        if s[i] == "}":
+            return bindings, i + 1
         m = _FIELD_NAME_RE.match(s, i)
         if m is None:
             raise DynamicsSyntaxError(
-                f"expected field name in object literal at position {i}"
+                f"expected field name at position {i}"
             )
         field_name = m.group(0)
         i = _skip_ws(s, m.end())
@@ -343,111 +569,69 @@ def _parse_object_literal_body(
             )
         i += 1  # consume '='
         full_name = f"{prefix}.{field_name}"
-        if _looks_like_object_literal(s, i):
-            # Nested composite: recurse, extending our binding list
-            # with the deeper paths.
-            sub_bindings, i = _parse_object_literal_body(
+        if _is_object_literal(s, i):
+            sub_bindings, i = _parse_object_literal(
                 s, i, prefix=full_name, open_pos=open_pos,
             )
             bindings.extend(sub_bindings)
         else:
-            parts, i = _parse_scalar_rhs(
-                s, i, until_chars="}", open_pos=open_pos,
-            )
-            bindings.append((full_name, parts))
+            value_parts, i = _parse_top(s, i, until_chars=",}")
+            bindings.append((full_name, value_parts))
         i = _skip_ws(s, i)
-        if i >= len(s) or s[i] != "}":
-            raise DynamicsSyntaxError(
-                f"expected '}}' to close field {field_name!r} at position {i}"
-            )
-        i += 1  # consume '}' of the field block
-        i = _skip_ws(s, i)
-        if i < len(s) and s[i] == ",":
-            i += 1  # consume ',' and look for another field
-            continue
-        return bindings, i
-
-
-def _parse_scalar_rhs(
-    s: str, i: int, *, until_chars: str, open_pos: int,
-) -> tuple[tuple[Node, ...], int]:
-    """Parse a scalar var/field RHS with ``|`` as implicit alternation.
-
-    Returns parts for the value. A single option flattens to its parts;
-    multiple options wrap in a :class:`Choice` so the renderer picks one.
-    """
-    options: list[Option] = []
-    while True:
-        weight, i = _parse_weight(s, i)
-        rhs_parts, i = _parse_seq(s, i, until_chars="|" + until_chars)
-        options.append(Option(weight, rhs_parts))
         if i >= len(s):
             raise DynamicsSyntaxError(
-                f"unclosed '${{' at position {open_pos}"
+                f"unclosed object literal opened at {open_pos}"
             )
-        if s[i] in until_chars:
-            break
-        i += 1  # consume '|'
-    if len(options) == 1:
-        return options[0].parts, i
-    return (Choice(tuple(options)),), i
+        if s[i] == ",":
+            i += 1
+            continue
+        if s[i] == "}":
+            return bindings, i + 1
+        raise DynamicsSyntaxError(
+            f"expected ',' or '}}' in object literal at position {i}"
+        )
 
 
-def _parse_weight(s: str, i: int) -> tuple[float, int]:
-    """Look for a ``<number>::`` prefix at position ``i``.
+def _skip_ws(s: str, i: int) -> int:
+    while i < len(s) and s[i] in " \t\n\r":
+        i += 1
+    return i
 
-    Returns ``(weight, position_after_prefix)``. Missing → ``(1.0, i)``.
-    Whitespace between the number and ``::`` is allowed (``2 :: a`` works).
-    """
-    m = _WEIGHT_RE.match(s, i)
-    if m is None:
-        return 1.0, i
-    return float(m.group(1)), m.end()
 
+# ---------- pass 2: render ----------
 
 def _render(
     parts: tuple[Node, ...],
     rng: random.Random,
     env: dict[str, str],
 ) -> str:
-    """Render a parsed sequence with seeded randomness and a shared env.
+    """Render an AST against a seeded RNG and a mutable env.
 
-    ``env`` is mutated in place by :class:`VarDef` nodes; that mutation
-    is intentional and the only way variables flow forward in the
-    sequence. The dict is shared across nested ``_render`` calls inside
-    one ``expand()`` invocation but is fresh per top-level call.
+    ``env`` is mutated by :class:`VarDef` / :class:`MultiVarDef` nodes —
+    intentional, that's how variables flow left-to-right within a
+    single expansion. The dict is fresh per top-level ``expand()`` call.
     """
     out: list[str] = []
     for p in parts:
         if isinstance(p, Literal):
             out.append(p.text)
-        elif isinstance(p, Choice):
+        elif isinstance(p, Alternation):
             if not p.options:
-                # `{}` — degenerate but well-defined: renders to "".
-                # Don't consume any RNG state.
                 continue
             weights = [o.weight for o in p.options]
             chosen = rng.choices(p.options, weights=weights, k=1)[0]
             out.append(_render(chosen.parts, rng, env))
         elif isinstance(p, VarDef):
-            # Evaluate the RHS, bind the name. Silent — definition site
-            # renders to nothing. Redefinition is allowed; the latest
-            # value wins.
             env[p.name] = _render(p.parts, rng, env)
         elif isinstance(p, MultiVarDef):
-            # Composite literal: bind each pre-flattened path. Same
-            # silent / latest-wins semantics as VarDef, just emitting
-            # several env entries from one syntactic block. Bindings are
-            # evaluated in source order so a later field can reference
-            # an earlier one ``${${p={a=red}, {b=${p.a}}}``.
             for binding_name, binding_parts in p.bindings:
                 env[binding_name] = _render(binding_parts, rng, env)
         elif isinstance(p, VarRef):
             if p.name not in env:
                 raise DynamicsSyntaxError(
                     f"undefined variable {p.name!r} — either it was never "
-                    f"defined or it was defined only inside a branch that "
-                    f"this seed didn't pick"
+                    f"defined or it was defined only inside an alternation "
+                    f"branch that this seed didn't pick"
                 )
             out.append(env[p.name])
     return "".join(out)

@@ -77,13 +77,15 @@
   }
 
   // All variable names defined earlier in `text`, including:
-  //   * scalar defs:        ${name=...}
-  //   * flat-dotted defs:   ${a.b.c=...}
-  //   * composite literals: ${person={hair=...}, {clothes=...}} → emits
-  //     "person.hair" and "person.clothes"
-  // For composite definitions only the leaf paths are returned (matching
+  //   * scalar defs:           ${name=...}
+  //   * flat-dotted defs:      ${a.b.c=...}
+  //   * composite literals:    ${person={hair=..., clothes=...}}
+  //     → emits "person.hair" and "person.clothes"
+  //   * verbatim defs:         ${name=`raw text`}
+  //     → emits "name"
+  // For composite definitions only the leaf paths are returned (that's
   // what's actually bound in env at expansion time); the parent name
-  // itself isn't included because `${person}` would raise.
+  // itself isn't included because `${parent}` would raise.
   function definedVarNames(text) {
     const seen = new Set();
     const out = [];
@@ -110,34 +112,90 @@
     return i;
   }
 
-  // Scan past a balanced `{...}` sequence starting from `start` (which
-  // points at the FIRST character of the value, i.e. just after `=`).
-  // Returns the position of the closing `}` at the original depth, or
-  // -1 if the input is unbalanced. Respects backslash escapes.
-  function _skipBalancedClose(text, start) {
-    let depth = 0;
-    for (let i = start; i < text.length; i += 1) {
-      const c = text[i];
-      if (c === "\\" && i + 1 < text.length) { i += 1; continue; }
-      if (c === "{") depth += 1;
-      else if (c === "}") {
-        if (depth === 0) return i;
-        depth -= 1;
-      }
+  function _findBacktickEnd(text, start) {
+    let i = start;
+    while (i < text.length) {
+      if (text[i] === "\\" && i + 1 < text.length) { i += 2; continue; }
+      if (text[i] === "`") return i;
+      i += 1;
     }
     return -1;
   }
 
-  // Returns flat dotted field paths if text[start:] is an object literal
-  // rooted at `prefix`. Returns [] when the value isn't a composite.
-  // Mirrors the Python parser's _parse_object_literal_body so the same
-  // shape is recognised on both sides.
+  // From `start` pointing at the `$` of a `${...}`, find the matching `}`.
+  // Mirrors the Python `_find_var_close`.
+  function _findVarClose(text, start) {
+    let i = start + 2;
+    let depth = 0;
+    while (i < text.length) {
+      const c = text[i];
+      if (c === "\\" && i + 1 < text.length) { i += 2; continue; }
+      if (c === "`") {
+        const end = _findBacktickEnd(text, i + 1);
+        if (end < 0) return -1;
+        i = end + 1;
+        continue;
+      }
+      if (c === "$" && text[i + 1] === "{") {
+        const nested = _findVarClose(text, i);
+        if (nested < 0) return -1;
+        i = nested + 1;
+        continue;
+      }
+      if (c === "{") { depth += 1; i += 1; }
+      else if (c === "}") {
+        if (depth === 0) return i;
+        depth -= 1; i += 1;
+      } else { i += 1; }
+    }
+    return -1;
+  }
+
+  // Skip a scalar field value, returning the position of the `,` or `}`
+  // (at depth 0) that terminates it. Treats verbatim strings, nested
+  // brackets, and nested ${...} blocks as opaque (non-delimiters).
+  function _skipScalarValueEnd(text, start) {
+    let i = start;
+    let depth = 0;
+    while (i < text.length) {
+      const c = text[i];
+      if (c === "\\" && i + 1 < text.length) { i += 2; continue; }
+      if (c === "`") {
+        const end = _findBacktickEnd(text, i + 1);
+        i = (end < 0) ? text.length : end + 1;
+        continue;
+      }
+      if (c === "$" && text[i + 1] === "{") {
+        const close = _findVarClose(text, i);
+        i = (close < 0) ? text.length : close + 1;
+        continue;
+      }
+      if (c === "{" || c === "[") { depth += 1; i += 1; continue; }
+      if (c === "}") {
+        if (depth === 0) return i;
+        depth -= 1; i += 1; continue;
+      }
+      if (c === "]") {
+        if (depth > 0) depth -= 1;
+        i += 1; continue;
+      }
+      if (c === "," && depth === 0) return i;
+      i += 1;
+    }
+    return -1;
+  }
+
+  // If `text[start:]` is an object literal (`{ident=`...), return the
+  // flat dotted field paths rooted at `prefix`. Returns [] when the
+  // value isn't a composite. Mirrors `_parse_object_literal` in the
+  // Python parser for the new JSON-like syntax:
+  //   `{k1=v1, k2={nested_k=v}}`  → ["prefix.k1", "prefix.k2.nested_k"]
   function _collectObjectFields(text, start, prefix) {
     const out = [];
-    // Peek: must start with `{<ident>=` (after optional whitespace) for
-    // this to be an object literal.
     let pos = _skipWs(text, start);
     if (text[pos] !== "{") return out;
+    // Peek to confirm this is an object literal — first inner token
+    // must be `<ident>=`.
     const probe = _skipWs(text, pos + 1);
     const peek = /[A-Za-z_][A-Za-z0-9_]*/y;
     peek.lastIndex = probe;
@@ -146,12 +204,10 @@
     const after = _skipWs(text, pm.index + pm[0].length);
     if (text[after] !== "=") return out;
 
-    // Walk all comma-separated field blocks.
+    pos += 1;  // consume '{'
     while (true) {
       pos = _skipWs(text, pos);
-      if (text[pos] !== "{") return out;
-      pos += 1;
-      pos = _skipWs(text, pos);
+      if (pos >= text.length || text[pos] === "}") return out;
       const fnRe = /[A-Za-z_][A-Za-z0-9_]*/y;
       fnRe.lastIndex = pos;
       const fm = fnRe.exec(text);
@@ -159,21 +215,25 @@
       const fieldName = fm[0];
       pos = _skipWs(text, fm.index + fm[0].length);
       if (text[pos] !== "=") return out;
-      pos += 1;
+      pos += 1;  // consume '='
+      pos = _skipWs(text, pos);
       const fullName = `${prefix}.${fieldName}`;
+      // Recurse if the value is itself an object literal.
       const nested = _collectObjectFields(text, pos, fullName);
       if (nested.length > 0) {
         out.push(...nested);
       } else {
         out.push(fullName);
       }
-      // Skip past the field block's closing `}` regardless of nesting.
-      pos = _skipBalancedClose(text, pos);
-      if (pos < 0) return out;
-      pos += 1;
+      // Step past the value (nested object or scalar) to the next `,` or `}`.
+      const end = _skipScalarValueEnd(text, pos);
+      if (end < 0) return out;
+      pos = end;
       pos = _skipWs(text, pos);
-      if (text[pos] !== ",") return out;
-      pos += 1;
+      if (pos >= text.length) return out;
+      if (text[pos] === ",") { pos += 1; continue; }
+      if (text[pos] === "}") return out;
+      return out;
     }
   }
 

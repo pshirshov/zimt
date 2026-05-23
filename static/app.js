@@ -446,13 +446,23 @@ function renderThumbs() {
     const img = document.createElement("img"); img.loading = "lazy";
     img.src = `/api/outputs/${encodeURIComponent(e.name)}?thumb=192`;
     d.appendChild(img);
-    // Top-left: reload-to-prompt. Mirrors the modal's Restore button.
-    const reload = document.createElement("button");
-    reload.className = "reload-btn";
-    reload.textContent = "↻";
-    reload.title = "restore prompt + settings from this image";
-    reload.onclick = (ev) => { ev.stopPropagation(); restoreToPrompt(e); };
-    d.appendChild(reload);
+    // Three stacked reload buttons (top to bottom):
+    //  1. "1:1"  — fill the prompt with the exact original command line
+    //              (uses the command_line PNG metadata field; disabled
+    //              on older images that predate the field).
+    //  2. "↺"   — restore prompt + settings, fresh random seed.
+    //  3. "="   — restore prompt + settings + the original seed (pinned).
+    const fillCmd = document.createElement("button");
+    fillCmd.className = "reload-btn reload-cmd-btn";
+    fillCmd.textContent = "1:1";
+    if (e.metadata && e.metadata.command_line) {
+      fillCmd.title = "fill prompt with the exact original input line (1:1)";
+      fillCmd.onclick = (ev) => { ev.stopPropagation(); fillCommandLine(e); };
+    } else {
+      fillCmd.title = "no command_line metadata on this image (predates the field)";
+      fillCmd.disabled = true;
+    }
+    d.appendChild(fillCmd);
     const reloadFreshSeed = document.createElement("button");
     reloadFreshSeed.className = "reload-btn reload-no-seed-btn";
     reloadFreshSeed.textContent = "↺";
@@ -462,6 +472,12 @@ function renderThumbs() {
       restoreToPrompt(e, { includeSeed: false });
     };
     d.appendChild(reloadFreshSeed);
+    const reloadWithSeed = document.createElement("button");
+    reloadWithSeed.className = "reload-btn reload-with-seed-btn";
+    reloadWithSeed.textContent = "=";
+    reloadWithSeed.title = "restore prompt + settings + original seed";
+    reloadWithSeed.onclick = (ev) => { ev.stopPropagation(); restoreToPrompt(e); };
+    d.appendChild(reloadWithSeed);
     // Top-right: favorite toggle.
     const star = document.createElement("button");
     star.className = "star-btn" + (e.fav ? " on" : "");
@@ -646,6 +662,18 @@ document.addEventListener("keydown", (e) => {
 function restoreToPrompt(entry, options = {}) {
   if (!entry) return;
   $("prompt-input").value = buildRestorePromptLine(entry.metadata || {}, options);
+  autoResize();
+  $("modal").classList.remove("open");
+  $("prompt-input").focus();
+}
+// Fill the prompt input verbatim from the PNG's `command_line` field —
+// a 1:1 round-trip of what the user originally typed (with /cmd parts
+// and template syntax intact). Distinct from restoreToPrompt which
+// reconstructs the line from decomposed metadata fields.
+function fillCommandLine(entry) {
+  const line = entry?.metadata?.command_line;
+  if (!line) return;
+  $("prompt-input").value = line;
   autoResize();
   $("modal").classList.remove("open");
   $("prompt-input").focus();

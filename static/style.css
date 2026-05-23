@@ -347,11 +347,19 @@
     border: none; color: #fff; font-size: 14px; line-height: 1;
     border-radius: 50%; width: 22px; height: 22px; padding: 0; }
   .star-btn.on { color: #ffcc44; }
-  .reload-btn { position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,0.55);
+  /* Three stacked buttons down the left edge of each thumbnail. Top to
+     bottom: fill-command-line (verbatim 1:1 round-trip), restore-no-seed
+     (re-roll a new random seed), restore-with-seed (pin the original
+     seed). All share the same circular pill geometry; per-button colours
+     and icons differentiate them. */
+  .reload-btn { position: absolute; left: 4px; background: rgba(0,0,0,0.55);
     border: none; color: #fff; font-size: 14px; line-height: 1;
     border-radius: 50%; width: 22px; height: 22px; padding: 0; }
-  .reload-btn:hover { color: var(--accent); }
+  .reload-btn:hover:not(:disabled) { color: var(--accent); }
+  .reload-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .reload-cmd-btn { top: 4px; font-size: 9px; font-weight: 600; color: #d3c891; }
   .reload-no-seed-btn { top: 30px; color: #cbe6ff; }
+  .reload-with-seed-btn { top: 56px; color: #c8e6b8; font-size: 16px; }
   .load-more { width: 100%; margin-top: 10px; padding: 8px; }
 
   /* modal */

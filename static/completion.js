@@ -57,23 +57,105 @@
     return -1;
   }
 
-  // All variable names defined earlier in `text` via `${name=...}`. We
-  // use a regex sweep rather than a full parser since highlighter speed
-  // matters more than perfect handling of pathological escape patterns
-  // — and any name typed inside a comment would also be inside `<!-- -->`
-  // and thus irrelevant to the user's completion anyway.
+  // All variable names defined earlier in `text`, including:
+  //   * scalar defs:        ${name=...}
+  //   * flat-dotted defs:   ${a.b.c=...}
+  //   * composite literals: ${person={hair=...}, {clothes=...}} → emits
+  //     "person.hair" and "person.clothes"
+  // For composite definitions only the leaf paths are returned (matching
+  // what's actually bound in env at expansion time); the parent name
+  // itself isn't included because `${person}` would raise.
   function definedVarNames(text) {
-    const names = [];
     const seen = new Set();
-    const re = /\$\{([A-Za-z_][A-Za-z0-9_]*)\s*=/g;
+    const out = [];
+    const add = (n) => {
+      if (!seen.has(n)) { seen.add(n); out.push(n); }
+    };
+    const re = /\$\{([A-Za-z_][A-Za-z0-9_.]*)\s*=/g;
     let m;
     while ((m = re.exec(text)) !== null) {
-      if (!seen.has(m[1])) {
-        seen.add(m[1]);
-        names.push(m[1]);
+      const baseName = m[1];
+      const valueStart = m.index + m[0].length;
+      const fields = _collectObjectFields(text, valueStart, baseName);
+      if (fields.length === 0) {
+        add(baseName);
+      } else {
+        fields.forEach(add);
       }
     }
-    return names;
+    return out;
+  }
+
+  function _skipWs(text, i) {
+    while (i < text.length && /\s/.test(text[i])) i += 1;
+    return i;
+  }
+
+  // Scan past a balanced `{...}` sequence starting from `start` (which
+  // points at the FIRST character of the value, i.e. just after `=`).
+  // Returns the position of the closing `}` at the original depth, or
+  // -1 if the input is unbalanced. Respects backslash escapes.
+  function _skipBalancedClose(text, start) {
+    let depth = 0;
+    for (let i = start; i < text.length; i += 1) {
+      const c = text[i];
+      if (c === "\\" && i + 1 < text.length) { i += 1; continue; }
+      if (c === "{") depth += 1;
+      else if (c === "}") {
+        if (depth === 0) return i;
+        depth -= 1;
+      }
+    }
+    return -1;
+  }
+
+  // Returns flat dotted field paths if text[start:] is an object literal
+  // rooted at `prefix`. Returns [] when the value isn't a composite.
+  // Mirrors the Python parser's _parse_object_literal_body so the same
+  // shape is recognised on both sides.
+  function _collectObjectFields(text, start, prefix) {
+    const out = [];
+    // Peek: must start with `{<ident>=` (after optional whitespace) for
+    // this to be an object literal.
+    let pos = _skipWs(text, start);
+    if (text[pos] !== "{") return out;
+    const probe = _skipWs(text, pos + 1);
+    const peek = /[A-Za-z_][A-Za-z0-9_]*/y;
+    peek.lastIndex = probe;
+    const pm = peek.exec(text);
+    if (!pm || pm.index !== probe) return out;
+    const after = _skipWs(text, pm.index + pm[0].length);
+    if (text[after] !== "=") return out;
+
+    // Walk all comma-separated field blocks.
+    while (true) {
+      pos = _skipWs(text, pos);
+      if (text[pos] !== "{") return out;
+      pos += 1;
+      pos = _skipWs(text, pos);
+      const fnRe = /[A-Za-z_][A-Za-z0-9_]*/y;
+      fnRe.lastIndex = pos;
+      const fm = fnRe.exec(text);
+      if (!fm || fm.index !== pos) return out;
+      const fieldName = fm[0];
+      pos = _skipWs(text, fm.index + fm[0].length);
+      if (text[pos] !== "=") return out;
+      pos += 1;
+      const fullName = `${prefix}.${fieldName}`;
+      const nested = _collectObjectFields(text, pos, fullName);
+      if (nested.length > 0) {
+        out.push(...nested);
+      } else {
+        out.push(fullName);
+      }
+      // Skip past the field block's closing `}` regardless of nesting.
+      pos = _skipBalancedClose(text, pos);
+      if (pos < 0) return out;
+      pos += 1;
+      pos = _skipWs(text, pos);
+      if (text[pos] !== ",") return out;
+      pos += 1;
+    }
   }
 
   function tokensBefore(value, end) {

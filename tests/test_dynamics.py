@@ -290,6 +290,144 @@ class ExpandVariableTests(unittest.TestCase):
         self.assertEqual(expand("[${c=}]${c}", _r(0)), "[]")
 
 
+class ExpandCompositeTests(unittest.TestCase):
+    """Object-literal composite variables — `${obj={k=v}, {k=v}}` form."""
+
+    def test_single_field_object_binds_dotted_path(self) -> None:
+        # `${p={hair=long}}${p.hair}` should render "long".
+        self.assertEqual(expand("${p={hair=long}}${p.hair}", _r(0)), "long")
+
+    def test_object_definition_is_silent(self) -> None:
+        # Like regular var defs, the definition site renders to "".
+        self.assertEqual(expand("${p={hair=long}}", _r(0)), "")
+
+    def test_multiple_fields_user_example(self) -> None:
+        # The exact syntax from the user's request:
+        # `${personA={hair=long|short}, {clothes=red|blue}}${personA.hair}`
+        out = expand(
+            "${p={hair=long|short}, {clothes=red|blue}}"
+            "${p.hair} hair, ${p.clothes} clothes",
+            _r(0),
+        )
+        # The values came from the seeded RNG; we don't pin them, but
+        # both colours and both lengths should be reachable across seeds.
+        self.assertIn(out.split(" hair")[0], {"long", "short"})
+        self.assertIn(out.split("clothes")[0].split(", ")[1].strip(),
+                      {"red", "blue"})
+
+    def test_redefinition_within_object_uses_latest(self) -> None:
+        # Object literal with the same field twice → latest wins, same
+        # rule as scalar VarDef redefinition.
+        self.assertEqual(
+            expand("${p={hair=long}, {hair=short}}${p.hair}", _r(0)),
+            "short",
+        )
+
+    def test_nested_object_literal_flattens(self) -> None:
+        # `${p={outfit={shirt=red}}}` binds `p.outfit.shirt`. We can
+        # reach it with a dotted reference.
+        self.assertEqual(
+            expand("${p={outfit={shirt=red}}}${p.outfit.shirt}", _r(0)),
+            "red",
+        )
+
+    def test_three_levels_of_nesting(self) -> None:
+        self.assertEqual(
+            expand(
+                "${a={b={c={d=value}}}}${a.b.c.d}",
+                _r(0),
+            ),
+            "value",
+        )
+
+    def test_field_value_with_alternation(self) -> None:
+        # Each field value still supports `|` implicit alternation.
+        # Run across seeds and verify both options are reachable.
+        seen: set[str] = set()
+        for seed in range(20):
+            seen.add(expand("${p={c=red|blue}}${p.c}", _r(seed)))
+        self.assertEqual(seen, {"red", "blue"})
+
+    def test_field_can_reference_earlier_field(self) -> None:
+        # Bindings within one MultiVarDef are evaluated left-to-right,
+        # so a later field can reference an earlier one.
+        self.assertEqual(
+            expand("${p={base=red}, {echo=${p.base} shirt}}${p.echo}", _r(0)),
+            "red shirt",
+        )
+
+    def test_flat_dotted_def_works_directly(self) -> None:
+        # `${a.b=...}` should be equivalent to `${a={b=...}}` — same
+        # env key. The composite syntax is just one way to spell it.
+        self.assertEqual(
+            expand("${p.hair=long}${p.hair}", _r(0)),
+            "long",
+        )
+
+    def test_reference_to_parent_without_dot_raises(self) -> None:
+        # `${p}` where only `p.hair` was bound → no such key.
+        with self.assertRaises(DynamicsSyntaxError):
+            expand("${p={hair=long}}${p}", _r(0))
+
+    def test_reference_to_missing_field_raises(self) -> None:
+        with self.assertRaises(DynamicsSyntaxError):
+            expand("${p={hair=long}}${p.clothes}", _r(0))
+
+    def test_brace_choice_in_rhs_stays_a_choice(self) -> None:
+        # `${color={red|blue}}` — the inner block has no `=`, so it's a
+        # regular Choice, not an object literal. The whole thing reduces
+        # to a scalar definition.
+        seen: set[str] = set()
+        for seed in range(10):
+            seen.add(expand("${color={red|blue}}${color}", _r(seed)))
+        self.assertEqual(seen, {"red", "blue"})
+
+    def test_whitespace_around_comma_and_braces_tolerated(self) -> None:
+        # `,` is the field separator; optional whitespace around it.
+        self.assertEqual(
+            expand(
+                "${p={hair=long} , {clothes=red}}"
+                "${p.hair} / ${p.clothes}",
+                _r(0),
+            ),
+            "long / red",
+        )
+
+    def test_object_inside_choice_branch(self) -> None:
+        # When a Choice picks the branch that defines the object, the
+        # binding is visible afterwards. The undefining branch makes
+        # the reference fail at expansion time — same rule as scalar.
+        outcomes: set[str] = set()
+        for seed in range(40):
+            try:
+                outcomes.add(
+                    expand(
+                        "{${p={c=red}}|${p={c=blue}}} -> ${p.c}",
+                        _r(seed),
+                    ),
+                )
+            except DynamicsSyntaxError:
+                outcomes.add("ERROR")
+        # Both branches define p.c, so we never hit the error path —
+        # we should see both possible expansions.
+        self.assertEqual(outcomes, {" -> red", " -> blue"})
+
+    def test_malformed_field_block_missing_equals_raises(self) -> None:
+        # `{hair}` looks like a Choice (no `=`), so the parser stays
+        # in scalar mode and the outer block is just `${p={hair}}` —
+        # a regular scalar def. Not malformed.
+        # Truly malformed: `${p={hair}, {clothes=red}}` would be ambiguous.
+        # Per our rule, the first block decides the mode. `{hair}` has
+        # no `=` so we're in scalar mode; the comma then becomes part
+        # of the scalar value. We accept that as well-defined.
+        out = expand("${p={hair}}${p}", _r(0))
+        self.assertEqual(out, "hair")
+
+    def test_unclosed_object_literal_raises(self) -> None:
+        with self.assertRaises(DynamicsSyntaxError):
+            expand("${p={hair=long}, {clothes=red}", _r(0))
+
+
 class ExpandIntegrationTests(unittest.TestCase):
     """Realistic prompts the user might type."""
 

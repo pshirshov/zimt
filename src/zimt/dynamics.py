@@ -2,14 +2,16 @@
 
 Syntax
 ------
-``{a|b|c}``         alternation: pick one option uniformly
-``{2::a|1::b}``     weighted alternation: 2/3 a, 1/3 b
-``{a {b|c}|d}``     nesting: choices nest to any depth
-``{|a|b}``          empty option allowed → "", "a", or "b"
-``${name=expr}``    variable: pick once, bind to ``name``, render nothing
-``${name}``         variable reference: render the bound value
-``\\{ \\| \\}``     backslash-escape for literal braces / pipe / dollar
-``<!-- foo -->``    HTML-style comments stripped before parsing
+``{a|b|c}``                   alternation: pick one option uniformly
+``{2::a|1::b}``               weighted alternation: 2/3 a, 1/3 b
+``{a {b|c}|d}``               nesting: choices nest to any depth
+``{|a|b}``                    empty option allowed → "", "a", or "b"
+``${name=expr}``              variable: pick once, bind to ``name``, render nothing
+``${name}``                   variable reference: render the bound value
+``${obj={k1=v1}, {k2=v2}}``   composite variable: each field binds at ``obj.k1`` etc.
+``${obj.k1}``                 access a composite field
+``\\{ \\| \\$``               backslash-escape for literal braces / pipe / dollar
+``<!-- foo -->``              HTML-style comments stripped before parsing
 
 Variables bind silently — the definition site itself renders to "" so the
 prompt reads cleanly when you don't want to display the chosen value
@@ -22,6 +24,18 @@ Inside ``${name=...}``, ``|`` is sugar for an implicit choice — so
 Forward references and references to a variable that wasn't defined
 along the actually-chosen branch raise :class:`DynamicsSyntaxError` at
 render time.
+
+Composite variables
+-------------------
+``${person={hair=long|short}, {clothes=red|blue}}`` binds two keys,
+``person.hair`` and ``person.clothes``, each evaluated independently
+from the same RNG stream. Fields nest arbitrarily — a field value can
+itself be another ``{name=value}, {name=value}`` object literal — and
+the flat-dotted equivalent ``${person.hair=long|short}`` works too.
+
+Storage is flat: ``env`` holds ``"person.hair"`` and ``"person.clothes"``
+as separate keys. ``${person}`` (no dot) raises like any other
+undefined variable — composite parents don't render as scalars.
 
 Determinism
 -----------
@@ -45,7 +59,14 @@ from dataclasses import dataclass
 
 _COMMENT_RE = re.compile(r"<!--.*?-->", flags=re.DOTALL)
 _WEIGHT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*::")
-_VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Variable names can include `.` so flat-dotted forms like ``${a.b=...}``
+# and references like ``${a.b.c}`` work alongside the composite-literal
+# syntax. The first character must still be a letter or underscore.
+_VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
+# Field names inside ``{name=value}`` object-literal blocks. No dots —
+# the dotted path is built by combining the outer name with the field
+# name at parse time.
+_FIELD_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class DynamicsSyntaxError(ValueError):
@@ -84,7 +105,23 @@ class VarRef:
     name: str
 
 
-Node = Literal | Choice | VarDef | VarRef
+@dataclass(frozen=True)
+class MultiVarDef:
+    """``${obj={k1=v1}, {k2=v2}}`` — emit multiple flat-dotted bindings.
+
+    The object-literal syntax is parser-only sugar; at the AST level we
+    just have an ordered sequence of ``(full_dotted_name, value_parts)``
+    pairs that bind in order against the shared env. Each binding is
+    silent like a regular :class:`VarDef`.
+
+    Nested object literals (``${a={b={c=...}}}``) flatten during parse
+    into deeper dotted paths, so the AST stays shallow no matter how
+    nested the syntactic form is.
+    """
+    bindings: tuple[tuple[str, tuple["Node", ...]], ...]
+
+
+Node = Literal | Choice | VarDef | VarRef | MultiVarDef
 
 
 def validate(text: str) -> None:
@@ -206,11 +243,13 @@ def _parse_choice(s: str, i: int, *, open_pos: int) -> tuple[Choice, int]:
 def _parse_var(s: str, i: int, *, open_pos: int) -> tuple[Node, int]:
     """Parse the body of a ``${...}`` starting just after the ``${``.
 
-    Two shapes:
-      * ``${name}``           — reference. Returns :class:`VarRef`.
-      * ``${name=<expr>}``   — definition. Inside the RHS, ``|`` is sugar
-        for an implicit choice so ``${color=red|green}`` works as
-        intuition suggests; explicit braces still nest as expected.
+    Three shapes:
+      * ``${name}``                   — reference. Returns :class:`VarRef`.
+      * ``${name=<expr>}``           — scalar definition. ``|`` inside the
+        RHS is implicit choice sugar.
+      * ``${name={k=v}, {k=v}, ...}`` — composite definition. Each field
+        binds at the flat-dotted path ``name.k``; nested object literals
+        flatten further. Returns :class:`MultiVarDef`.
     """
     m = _VAR_NAME_RE.match(s, i)
     if m is None:
@@ -229,26 +268,129 @@ def _parse_var(s: str, i: int, *, open_pos: int) -> tuple[Node, int]:
         raise DynamicsSyntaxError(
             f"expected '=' or '}}' after variable {name!r} at position {open_pos}"
         )
-    # `${name=...}` — parse the RHS with `|` acting as an implicit
-    # alternation separator. One option → bind to that sequence; many →
-    # wrap in a Choice. Weights work like inside a regular ``{...}``.
     i += 1  # consume '='
+    # Composite ahead? Detect by peeking — the first non-whitespace must
+    # be ``{name=`` for object-literal mode. A bare ``{`` without an
+    # equals inside is still a regular Choice in scalar mode.
+    if _looks_like_object_literal(s, i):
+        bindings, i = _parse_object_literal_body(s, i, prefix=name, open_pos=open_pos)
+        i = _skip_ws(s, i)
+        if i >= len(s) or s[i] != "}":
+            raise DynamicsSyntaxError(
+                f"unclosed '${{' at position {open_pos}"
+            )
+        return MultiVarDef(tuple(bindings)), i + 1
+    # Scalar definition — `|` in RHS is implicit Choice sugar.
+    parts, i = _parse_scalar_rhs(s, i, until_chars="}", open_pos=open_pos)
+    if i >= len(s) or s[i] != "}":
+        raise DynamicsSyntaxError(
+            f"unclosed '${{' at position {open_pos}"
+        )
+    return VarDef(name, parts), i + 1
+
+
+def _skip_ws(s: str, i: int) -> int:
+    while i < len(s) and s[i] in " \t\n\r":
+        i += 1
+    return i
+
+
+def _looks_like_object_literal(s: str, i: int) -> bool:
+    """Lookahead: does the value at ``s[i:]`` start with a field block?
+
+    A field block is ``{<ident>=...}`` — the presence of ``=`` after the
+    opening ``{`` and an identifier is the distinguishing signal. Any
+    other shape (bare alternation ``{a|b}``, literal text) is scalar.
+    """
+    j = _skip_ws(s, i)
+    if j >= len(s) or s[j] != "{":
+        return False
+    j = _skip_ws(s, j + 1)
+    m = _FIELD_NAME_RE.match(s, j)
+    if m is None:
+        return False
+    j = _skip_ws(s, m.end())
+    return j < len(s) and s[j] == "="
+
+
+def _parse_object_literal_body(
+    s: str, i: int, *, prefix: str, open_pos: int,
+) -> tuple[list[tuple[str, tuple[Node, ...]]], int]:
+    """Parse ``{k1=v1}, {k2=v2}, ...`` and return flat bindings.
+
+    Each block's value is itself parsed in RHS mode, so it can be either
+    a scalar (with ``|`` alternation) or another nested object literal.
+    The returned bindings list is flat: nested objects' field paths are
+    already joined with the parent prefix.
+    """
+    bindings: list[tuple[str, tuple[Node, ...]]] = []
+    while True:
+        i = _skip_ws(s, i)
+        if i >= len(s) or s[i] != "{":
+            return bindings, i
+        i += 1  # consume '{'
+        i = _skip_ws(s, i)
+        m = _FIELD_NAME_RE.match(s, i)
+        if m is None:
+            raise DynamicsSyntaxError(
+                f"expected field name in object literal at position {i}"
+            )
+        field_name = m.group(0)
+        i = _skip_ws(s, m.end())
+        if i >= len(s) or s[i] != "=":
+            raise DynamicsSyntaxError(
+                f"expected '=' after field {field_name!r} at position {i}"
+            )
+        i += 1  # consume '='
+        full_name = f"{prefix}.{field_name}"
+        if _looks_like_object_literal(s, i):
+            # Nested composite: recurse, extending our binding list
+            # with the deeper paths.
+            sub_bindings, i = _parse_object_literal_body(
+                s, i, prefix=full_name, open_pos=open_pos,
+            )
+            bindings.extend(sub_bindings)
+        else:
+            parts, i = _parse_scalar_rhs(
+                s, i, until_chars="}", open_pos=open_pos,
+            )
+            bindings.append((full_name, parts))
+        i = _skip_ws(s, i)
+        if i >= len(s) or s[i] != "}":
+            raise DynamicsSyntaxError(
+                f"expected '}}' to close field {field_name!r} at position {i}"
+            )
+        i += 1  # consume '}' of the field block
+        i = _skip_ws(s, i)
+        if i < len(s) and s[i] == ",":
+            i += 1  # consume ',' and look for another field
+            continue
+        return bindings, i
+
+
+def _parse_scalar_rhs(
+    s: str, i: int, *, until_chars: str, open_pos: int,
+) -> tuple[tuple[Node, ...], int]:
+    """Parse a scalar var/field RHS with ``|`` as implicit alternation.
+
+    Returns parts for the value. A single option flattens to its parts;
+    multiple options wrap in a :class:`Choice` so the renderer picks one.
+    """
     options: list[Option] = []
     while True:
         weight, i = _parse_weight(s, i)
-        rhs_parts, i = _parse_seq(s, i, until_chars="|}")
+        rhs_parts, i = _parse_seq(s, i, until_chars="|" + until_chars)
         options.append(Option(weight, rhs_parts))
         if i >= len(s):
             raise DynamicsSyntaxError(
                 f"unclosed '${{' at position {open_pos}"
             )
-        if s[i] == "}":
-            i += 1  # consume '}'
+        if s[i] in until_chars:
             break
         i += 1  # consume '|'
     if len(options) == 1:
-        return VarDef(name, options[0].parts), i
-    return VarDef(name, (Choice(tuple(options)),)), i
+        return options[0].parts, i
+    return (Choice(tuple(options)),), i
 
 
 def _parse_weight(s: str, i: int) -> tuple[float, int]:
@@ -292,6 +434,14 @@ def _render(
             # renders to nothing. Redefinition is allowed; the latest
             # value wins.
             env[p.name] = _render(p.parts, rng, env)
+        elif isinstance(p, MultiVarDef):
+            # Composite literal: bind each pre-flattened path. Same
+            # silent / latest-wins semantics as VarDef, just emitting
+            # several env entries from one syntactic block. Bindings are
+            # evaluated in source order so a later field can reference
+            # an earlier one ``${${p={a=red}, {b=${p.a}}}``.
+            for binding_name, binding_parts in p.bindings:
+                env[binding_name] = _render(binding_parts, rng, env)
         elif isinstance(p, VarRef):
             if p.name not in env:
                 raise DynamicsSyntaxError(

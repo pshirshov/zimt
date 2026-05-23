@@ -146,7 +146,9 @@
         out += span("hl-var", "${");
         i += 2;
         let nameEnd = i;
-        while (nameEnd < N && /[A-Za-z0-9_]/.test(text[nameEnd])) nameEnd += 1;
+        // Allow `.` in the name so dotted refs like ${person.hair} paint
+        // as one var-name span. The Python parser uses the same rule.
+        while (nameEnd < N && /[A-Za-z0-9_.]/.test(text[nameEnd])) nameEnd += 1;
         if (nameEnd > i) {
           out += span("hl-var-name", text.substring(i, nameEnd));
         }
@@ -173,11 +175,31 @@
         continue;
       }
 
-      // Choice open
+      // Choice open — or a field block of an object literal. We peek
+      // for `{<ident>=` to distinguish: if yes, paint the field name
+      // and `=` with the variable colours so the composite structure
+      // ``{hair=long|short}, {clothes=red|blue}`` reads at a glance.
+      // Otherwise it's a plain Choice opener.
       if (c === "{") {
         out += span("hl-brace", "{");
         braceStack.push("hl-brace");
         i += 1;
+        // Peek: optional whitespace, identifier, optional whitespace, '='.
+        let j = i;
+        while (j < N && /\s/.test(text[j])) j += 1;
+        const nameMatch = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.substring(j));
+        if (nameMatch) {
+          let k = j + nameMatch[0].length;
+          while (k < N && /\s/.test(text[k])) k += 1;
+          if (k < N && text[k] === "=") {
+            // Emit the whitespace verbatim, then the name + '='.
+            out += text.substring(i, j);
+            out += span("hl-var-name", nameMatch[0]);
+            out += text.substring(j + nameMatch[0].length, k);
+            out += span("hl-var-eq", "=");
+            i = k + 1;
+          }
+        }
         plainEmitted = true;
         atWordStart = false;
         continue;

@@ -156,6 +156,18 @@ references raise `DynamicsSyntaxError`. A reference to a variable that
 was only defined inside a Choice branch the seed didn't pick also
 raises — the error message says so explicitly.
 
+Composite variables: `${person={hair=long|short}, {clothes=red|blue}}`
+binds `person.hair` and `person.clothes` as separate flat-dotted env
+keys, evaluated left-to-right against the same RNG. Fields nest:
+`${p={outfit={top=...}, {bottom=...}}}` flattens to `p.outfit.top` and
+`p.outfit.bottom` at parse time (`MultiVarDef` in the AST). The
+disambiguating signal is `{<ident>=` at the start of the RHS — without
+it, the brace stays a regular Choice. `${person}` (no dot) is an
+undefined-variable error; composite parents don't render as scalars.
+
+`${a.b=...}` flat-dotted form is also accepted and is exactly equivalent
+to the composite spelling — same env key, no semantic difference.
+
 Determinism is anchored to the same `seed` that drives image sampling.
 A `random.Random(seed)` instance is created inside `expand()`; the torch
 generator inside `pipe(...)` uses the same seed via its own

@@ -165,3 +165,31 @@ test("known slash command is recognised after a template close", () => {
   const html = renderPromptHTML("{red|blue} /cfg 5");
   assert.ok(html.includes('class="hl-cmd">/cfg'));
 });
+
+test("composite literal field name and = use variable colours", () => {
+  // `{hair=long|short}` inside the RHS — the field name should paint
+  // as hl-var-name and the `=` as hl-var-eq so the structure reads.
+  const toks = tokens(renderPromptHTML("${p={hair=long|short}}"));
+  // We don't pin the entire sequence (slot for whitespace etc. varies)
+  // but check that the field-name + equals colours appear.
+  const names = toks.filter((t) => t.cls === "hl-var-name").map((t) => t.text);
+  const eqs = toks.filter((t) => t.cls === "hl-var-eq").map((t) => t.text);
+  assert.deepEqual(names, ["p", "hair"]);
+  assert.deepEqual(eqs, ["=", "="]);
+});
+
+test("dotted reference name highlights as one var-name", () => {
+  const toks = tokens(renderPromptHTML("${person.hair}"));
+  const names = toks.filter((t) => t.cls === "hl-var-name").map((t) => t.text);
+  // `.` is allowed inside the name, so it stays one token.
+  assert.deepEqual(names, ["person.hair"]);
+});
+
+test("multi-field composite literal highlights each field", () => {
+  const toks = tokens(renderPromptHTML(
+    "${p={hair=long|short}, {clothes=red|blue}}"
+  ));
+  const names = toks.filter((t) => t.cls === "hl-var-name").map((t) => t.text);
+  // outer var name + two field names.
+  assert.deepEqual(names, ["p", "hair", "clothes"]);
+});

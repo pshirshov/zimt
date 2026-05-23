@@ -80,6 +80,58 @@ test("forward references are not suggested", () => {
   assert.deepEqual(items, []);
 });
 
+test("definedVarNames extracts composite field paths", () => {
+  // User's exact syntax: `${p={hair=long|short}, {clothes=red|blue}}`
+  // should yield ["p.hair", "p.clothes"] — both flat-dotted leaves.
+  const names = definedVarNames(
+    "${p={hair=long|short}, {clothes=red|blue}}"
+  );
+  assert.deepEqual(names, ["p.hair", "p.clothes"]);
+});
+
+test("definedVarNames extracts nested composite field paths", () => {
+  // Nested object literal: outfit.shirt and outfit.pants.
+  const names = definedVarNames(
+    "${p={outfit={shirt=red}, {pants=blue}}, {hair=long}}"
+  );
+  assert.deepEqual(names, ["p.outfit.shirt", "p.outfit.pants", "p.hair"]);
+});
+
+test("definedVarNames flat-dotted def is accepted directly", () => {
+  // `${a.b=...}` is equivalent to `${a={b=...}}` — the regex captures
+  // the dotted form too.
+  const names = definedVarNames("${a.b=red}${a.c=blue}");
+  assert.deepEqual(names, ["a.b", "a.c"]);
+});
+
+test("dotted reference completion suggests composite fields", () => {
+  // User types `${personA.h<TAB>` after defining the composite.
+  const value =
+    "${personA={hair=long|short}, {clothes=red|blue}}" +
+    "${personA.h";
+  // tokStart was narrowed by updateSuggest to point at the second `$`.
+  const tokStart = "${personA={hair=long|short}, {clothes=red|blue}}".length;
+  const tokText = "${personA.h";
+  const items = completionItems(value, tokStart, tokText, {});
+  assert.deepEqual(
+    items.map((it) => it.label),
+    ["${personA.hair}"],
+  );
+});
+
+test("dotted reference completion without typed field suggests all fields", () => {
+  // `${personA.<TAB>` with nothing after the dot — both fields offered.
+  const value =
+    "${personA={hair=long|short}, {clothes=red|blue}}" +
+    "${personA.";
+  const tokStart = "${personA={hair=long|short}, {clothes=red|blue}}".length;
+  const items = completionItems(value, tokStart, "${personA.", {});
+  assert.deepEqual(
+    items.map((it) => it.label),
+    ["${personA.hair}", "${personA.clothes}"],
+  );
+});
+
 test("variable suggestions exclude definitions only inside future text", () => {
   // Definition appears AFTER the cursor — must not appear in
   // suggestions because forward refs raise at expansion time.

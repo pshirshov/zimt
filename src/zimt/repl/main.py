@@ -43,6 +43,8 @@ def _help() -> None:
     print("  {a {b|c}|d}          nesting; {|a} means 'maybe a, maybe nothing'")
     print("  ${c=red|green|blue}  bind variable (silent); pick once per seed")
     print("  ${c}                 reference the bound value (reuse the pick)")
+    print("  ${o={k=v}, {k=v}}    composite var: binds o.k = v for each field")
+    print("  ${o.k}               access a composite field (nested OK: o.a.b)")
     print("  \\{ \\| \\$              escape for literal braces / pipe / dollar")
     print("  <!-- foo -->         comment, stripped before encoding")
     print("  /help                show this")

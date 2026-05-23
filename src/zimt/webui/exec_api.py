@@ -203,6 +203,8 @@ _HELP_LINES = [
     "  {a|b|c}                alternation; supports nesting & {|a} for empty",
     "  {2::a|1::b}            weighted alternation",
     "  ${c=red|green|blue}    bind variable (silent); ${c} references it",
+    "  ${o={k=v}, {k=v}}      composite var: binds o.k for each field",
+    "  ${o.k}                 access a composite field (nested OK: o.a.b)",
     "  \\{ \\| \\$                escape for literal braces / pipe / dollar",
     "  <!-- foo -->           comment, stripped before encoding",
     "multiple commands may be combined on one line, e.g.",

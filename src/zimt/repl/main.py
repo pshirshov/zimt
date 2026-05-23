@@ -10,6 +10,7 @@ import torch
 from ..buckets import parse_res
 from ..generate import GenConfig, generate, load_spec, unload
 from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
+from ..memory import DEFAULT as DEFAULT_MEM, MemArgError, MemStrategy, parse_mem_args
 from ..models.custom import reload_custom_into_registries
 from ..models.registry import MODELS
 from ..preview import IN_TMUX, detect_protocol, preview
@@ -33,6 +34,8 @@ def _help() -> None:
     print("  /model [name]        switch model; bare lists available")
     print("  /lora <name>         add/update one LoRA: name, name:0.8, -name, -; repeat for stacking")
     print("  /tokenize <text>     show per-encoder tokenization heuristics")
+    print("  /mem [mode [arg]]    set memory strategy; bare shows current.")
+    print("                       modes: off | max <size> | cpuoffload | cpuoffload-seq")
     print("  /help                show this")
     print("  /quit | /exit | ^D   leave")
     print("note: negative prompt is only consulted when cfg > 0.")
@@ -90,6 +93,7 @@ def repl_main() -> int:
 
     pipe: Any = None
     g: GenConfig | None = None
+    mem: MemStrategy = DEFAULT_MEM
 
     proto = detect_protocol()
     tmux_note = " (in tmux: needs `set -g allow-passthrough on`)" if IN_TMUX else ""
@@ -144,7 +148,7 @@ def repl_main() -> int:
                     print(f"unloading {g.spec.name} ...")  # type: ignore[union-attr]
                     unload(pipe)
                     pipe = None
-                pipe = load_spec(MODELS[name])
+                pipe = load_spec(MODELS[name], mem)
                 g = _new_config(name)
                 _print_state(g)
             elif cmd == "/seed":
@@ -173,6 +177,33 @@ def repl_main() -> int:
                 _help()
                 if g is not None:
                     _print_state(g)
+            elif cmd == "/mem":
+                # GREEDY arity hands us a single joined string. Split back
+                # into tokens for the parser. Bare `/mem` shows current.
+                tokens = (args[0].split() if args else [])
+                if not tokens:
+                    print(f"mem = {mem.describe()}")
+                    continue
+                try:
+                    new_mem = parse_mem_args(tokens)
+                except MemArgError as e:
+                    print(f"/mem: {e}")
+                    continue
+                if new_mem == mem:
+                    print(f"mem = {mem.describe()} (unchanged)")
+                    continue
+                mem = new_mem
+                print(f"mem = {mem.describe()}")
+                if pipe is not None and g is not None:
+                    name = g.spec.name
+                    print(f"reloading {name} with new memory strategy ...")
+                    unload(pipe)
+                    pipe = None
+                    try:
+                        pipe = load_spec(MODELS[name], mem)
+                    except Exception as e:
+                        print(f"reload failed: {e}")
+                        g = None
             elif cmd == "/lora":
                 if not _require_pipe(pipe) or g is None:
                     continue

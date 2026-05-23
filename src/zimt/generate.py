@@ -23,6 +23,7 @@ from PIL.PngImagePlugin import PngInfo
 
 from . import ansi
 from .device import DEVICE
+from .memory import MemStrategy
 from .models.loras import LORAS
 from .models.spec import ModelSpec
 from .paths import OUT_DIR
@@ -298,6 +299,17 @@ def _release_pipe_components(pipe: Any) -> None:
     # Wrapped in its own function so the loop locals (`sub`, `mover`,
     # `components`) die at return — leaving no stray references that
     # would keep submodule tensors alive past the caller's gc pass.
+    # Strip accelerate dispatch hooks first if the pipe is hook-managed
+    # (model/sequential CPU offload or device_map). Without this, the
+    # subsequent .to("cpu") emits "you shouldn't move a model that is
+    # dispatched using accelerate hooks" and may leave the hook closures
+    # holding references to submodule weights.
+    remover = getattr(pipe, "remove_all_hooks", None)
+    if callable(remover):
+        try:
+            remover()
+        except Exception as e:
+            _log.debug("unload: remove_all_hooks failed: %r", e)
     components: dict[str, Any] = getattr(pipe, "components", {}) or {}
     for name in list(components.keys()):
         sub = getattr(pipe, name, None)
@@ -340,10 +352,15 @@ def unload(pipe: Any) -> None:
         torch.cuda.empty_cache()
 
 
-def load_spec(spec: ModelSpec) -> Any:
-    """Print a banner and dispatch to the spec's ``load`` callable."""
-    print(f"loading {spec.name}: {spec.description}")
+def load_spec(spec: ModelSpec, mem: MemStrategy) -> Any:
+    """Print a banner and dispatch to the spec's ``load`` callable.
+
+    ``mem`` controls device placement (see :mod:`zimt.memory`). The active
+    strategy is included in the banner so the user can see at a glance
+    whether they're on a low-VRAM mode.
+    """
+    print(f"loading {spec.name}: {spec.description}  [mem={mem.describe()}]")
     t0 = time.time()
-    pipe = spec.load(DEVICE)
+    pipe = spec.load(DEVICE, mem)
     print(f"loaded in {time.time() - t0:.1f}s")
     return pipe

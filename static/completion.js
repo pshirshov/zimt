@@ -4,8 +4,15 @@
   const COMMANDS = [
     "/help", "/?", "/raw", "/many", "/seed", "/negprompt", "/cfg", "/steps",
     "/size", "/res", "/sampler", "/clip_skip", "/model", "/lora", "/tokenize",
+    "/mem",
     "/quit", "/exit", "/q",
   ].sort();
+
+  // Static suggestions for `/mem max <size>`. Free-form — accelerate
+  // accepts any size string ("4GiB", "6GB", ...); this list is just UX
+  // convenience.
+  const MEM_MODES = ["off", "max", "cpuoffload", "cpuoffload-seq"];
+  const MEM_SIZE_HINTS = ["2GiB", "4GiB", "6GiB", "8GiB", "10GiB", "12GiB", "16GiB"];
 
   const COMMAND_HELP = {
     "/help": "show command list",
@@ -26,6 +33,7 @@
     "/lora": "add/remove LoRAs (name | name:0.8 | -name | -)",
     "/tokenize": "per-encoder token analysis",
     "/negprompt": "set/clear negative prompt",
+    "/mem": "memory strategy (off | max <size> | cpuoffload | cpuoffload-seq)",
   };
 
   function tokenAtCursor(value, cursor) {
@@ -109,6 +117,24 @@
       const explicit = presets.map((r) => ({ label: `${r.w}x${r.h}`, desc: r.label }));
       return [...orientations, ...explicit]
         .filter((it) => it.label.toLowerCase().startsWith(lower));
+    }
+
+    if (prev === "/mem") {
+      return MEM_MODES
+        .filter((m) => m.toLowerCase().startsWith(lower))
+        .map((m) => ({ label: m, desc: "" }));
+    }
+
+    // `/mem max <size>`: suggest common caps when the user is on the
+    // size token. `/mem` is GREEDY in the Python parser, so we can't
+    // rely on `prev` alone — look back for `/mem max`.
+    if (prev === "max") {
+      const memIdx = before.lastIndexOf("/mem");
+      if (memIdx >= 0 && before[memIdx + 1] === "max") {
+        return MEM_SIZE_HINTS
+          .filter((s) => s.toLowerCase().startsWith(lower))
+          .map((s) => ({ label: s, desc: "" }));
+      }
     }
 
     if (tokText.startsWith("/")) {

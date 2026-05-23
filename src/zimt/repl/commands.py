@@ -27,6 +27,12 @@ COMMAND_ARITY: dict[str, Arity] = {
     "/negprompt": "GREEDY",
     "/tokenize": "GREEDY",
     "/lora": 1,
+    # ``/mem`` accepts ``off``, ``cpuoffload``, ``cpuoffload-seq`` (zero
+    # extra args) or ``max <size>`` (one extra arg). GREEDY lets a single
+    # arity entry handle both shapes; the handler splits and validates.
+    # GREEDY also stops at the next ``/cmd`` boundary so combining with
+    # other commands on one line still parses cleanly.
+    "/mem": "GREEDY",
 }
 
 KNOWN_COMMANDS: frozenset[str] = frozenset(COMMAND_ARITY)

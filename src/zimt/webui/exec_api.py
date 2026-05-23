@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from ..buckets import parse_res
 from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
+from ..memory import MemArgError, parse_mem_args
 from ..models.registry import MODELS
 from ..repl.commands import parse_commands
 from .jobs import run_job
@@ -195,6 +196,8 @@ _HELP_LINES = [
     "  /model <name>          load a model",
     "  /lora <name>           add/update one LoRA (name, name:0.8, -name, -); repeat for stacking",
     "  /tokenize <text>       show per-encoder token analysis",
+    "  /mem [mode [arg]]      memory strategy; bare shows current",
+    "                         modes: off | max <size> | cpuoffload | cpuoffload-seq",
     "multiple commands may be combined on one line, e.g.",
     "  /model pony-v6-xl /cfg 5 /steps 25 cute anime girl",
 ]
@@ -278,6 +281,45 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
                 log.append(ln)
                 await emit_log(ln)
             await emit_state()
+        elif cmd == "/mem":
+            tokens = (args[0].split() if args else [])
+            if not tokens:
+                msg = f"mem = {STATE.mem.describe()}"
+                log.append(msg)
+                await emit_log(msg)
+                continue
+            try:
+                new_mem = parse_mem_args(tokens)
+            except MemArgError as e:
+                msg = f"/mem: {e}"
+                log.append(msg)
+                await emit_log(msg, level="error")
+                continue
+            if new_mem == STATE.mem:
+                msg = f"mem = {STATE.mem.describe()} (unchanged)"
+                log.append(msg)
+                await emit_log(msg)
+                continue
+            STATE.mem = new_mem
+            msg = f"mem = {STATE.mem.describe()}"
+            log.append(msg)
+            await emit_log(msg)
+            await emit_state()
+            # If a model is loaded, reload it so the new strategy takes
+            # effect now (matches the REPL's auto-reload behaviour). With
+            # no model loaded, the new strategy is sticky and applies on
+            # the next /model load.
+            if STATE.pipe is not None and STATE.g is not None:
+                current = STATE.g.spec.name
+                await emit_log(
+                    f"reloading {current} with mem={STATE.mem.describe()}"
+                )
+                try:
+                    await load_model(current, force=True)
+                except ModelLoadError as e:
+                    msg = f"/mem reload: {e}"
+                    log.append(msg)
+                    await emit_log(msg, level="error")
         elif cmd == "/tokenize":
             if not await _need_pipe("/tokenize", log):
                 continue

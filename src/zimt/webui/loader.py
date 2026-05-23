@@ -38,13 +38,17 @@ def _has_active_generation_jobs() -> bool:
 
 
 def _do_load_sync(name: str) -> None:
-    """Executor-thread payload — unload current (if any), load new, reset cfg."""
+    """Executor-thread payload — unload current (if any), load new, reset cfg.
+
+    The active memory strategy lives on STATE.mem; if the user changed it
+    via ``/mem``, the next load picks it up here.
+    """
     if STATE.pipe is not None:
         unload(STATE.pipe)
         STATE.pipe = None
     STATE.g = None
     spec = MODELS[name]
-    pipe = load_spec(spec)
+    pipe = load_spec(spec, STATE.mem)
     STATE.pipe = pipe
     STATE.g = GenConfig(
         spec=spec,
@@ -56,14 +60,20 @@ def _do_load_sync(name: str) -> None:
     )
 
 
-async def load_model(name: str) -> None:
+async def load_model(name: str, *, force: bool = False) -> None:
     """No-ops when the requested model is already loaded.
+
+    ``force=True`` skips the "already loaded" short-circuits so the model
+    is unloaded and re-loaded — used when STATE.mem changes and the
+    currently-resident pipeline needs to pick up the new strategy.
 
     Raises :class:`ModelLoadError` on unknown name or load failure.
     """
     if name not in MODELS:
         raise ModelLoadError(f"unknown model {name!r}")
-    if STATE.pipe is not None and STATE.g is not None and STATE.g.spec.name == name:
+    if (not force
+            and STATE.pipe is not None and STATE.g is not None
+            and STATE.g.spec.name == name):
         await emit_log(f"{name} is already loaded")
         return
 
@@ -110,7 +120,9 @@ async def load_model(name: str) -> None:
             await asyncio.sleep(0.25)
 
         async with PIPE_LOCK:
-            if STATE.pipe is not None and STATE.g is not None and STATE.g.spec.name == name:
+            if (not force
+                    and STATE.pipe is not None and STATE.g is not None
+                    and STATE.g.spec.name == name):
                 await emit_log(f"{name} is already loaded")
                 job.status = "done"
                 job.ts_done = datetime.now().timestamp()

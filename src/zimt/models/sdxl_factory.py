@@ -22,27 +22,36 @@ from typing import Any, Callable
 
 import torch
 
+from ..memory import MemStrategy, finalize_pipe, from_pretrained_kwargs
+
 
 def make_sdxl_loader(
     repo_id: str,
     *,
     use_fp16_fix_vae: bool = True,
-) -> Callable[[str], Any]:
-    """Return a ``load(device) -> pipeline`` callable for the given HF repo."""
+) -> Callable[[str, MemStrategy], Any]:
+    """Return a ``load(device, mem) -> pipeline`` callable for the given HF repo.
 
-    def load(device: str) -> Any:
+    ``mem`` controls device placement: see :mod:`zimt.memory` for the four
+    strategies and their tradeoffs.
+    """
+
+    def load(device: str, mem: MemStrategy) -> Any:
         from diffusers import (  # type: ignore[import-not-found]
             AutoencoderKL,
             StableDiffusionXLPipeline,
         )
-        kwargs: dict[str, Any] = {"torch_dtype": torch.bfloat16}
+        kwargs: dict[str, Any] = {
+            "torch_dtype": torch.bfloat16,
+            **from_pretrained_kwargs(mem),
+        }
         if use_fp16_fix_vae:
             kwargs["vae"] = AutoencoderKL.from_pretrained(
                 "madebyollin/sdxl-vae-fp16-fix",
                 torch_dtype=torch.bfloat16,
             )
         pipe = StableDiffusionXLPipeline.from_pretrained(repo_id, **kwargs)
-        pipe.to(device)
+        finalize_pipe(pipe, device, mem)
         return pipe
 
     load.__name__ = f"load_sdxl[{repo_id}]"

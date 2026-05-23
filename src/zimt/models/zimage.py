@@ -11,18 +11,20 @@ from typing import Any
 
 import torch
 
+from ..memory import MemStrategy, finalize_pipe, from_pretrained_kwargs
 from ..tokenize_report import tokenize_one
 
 
-def load(device: str) -> Any:
+def load(device: str, mem: MemStrategy) -> Any:
     from diffusers import ZImagePipeline  # type: ignore[attr-defined]
 
     pipe = ZImagePipeline.from_pretrained(
         "Tongyi-MAI/Z-Image-Turbo",
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
+        **from_pretrained_kwargs(mem),
     )
-    pipe.to(device)
+    finalize_pipe(pipe, device, mem)
     return pipe
 
 

@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from ..generate import GenConfig
+from ..memory import DEFAULT as DEFAULT_MEM, MemStrategy
 from ..models.loras import LORAS
 from ..models.registry import MODELS
 
@@ -97,6 +98,10 @@ class AppState:
     pipe: Any | None = None
     g: GenConfig | None = None
     loading_model: str | None = None
+    # Memory placement strategy applied to the next model load. Set via
+    # the `/mem` command in /api/exec; the loader threads it through to
+    # ``load_spec``. Defaults to ``off`` (eager `.to(device)`).
+    mem: MemStrategy = DEFAULT_MEM
     jobs: dict[str, Job] = field(default_factory=dict)
     clients: set[WebSocket] = field(default_factory=set)
 
@@ -143,6 +148,8 @@ class AppState:
                     [{"name": n, "weight": w} for n, w in self.g.lora_stack]
                     if self.g else []
                 ),
+                "mem_mode": self.mem.mode,
+                "mem_max_size": self.mem.max_size,
             },
         }
 

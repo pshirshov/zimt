@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import readline
 
+from ..memory import MODES as MEM_MODES
 from ..models.loras import LORAS
 from ..models.registry import MODELS
 from ..paths import HISTORY_PATH
@@ -17,6 +18,9 @@ from .commands import COMMANDS
 
 
 _ORIENTATION_RESOLUTIONS = ("square", "landscape", "portrait")
+# Suggested caps for `/mem max <TAB>`. Free-form — accelerate parses any
+# size string ("4GiB", "6GB", etc.); this list is just convenience.
+_MEM_SIZE_HINTS = ("2GiB", "4GiB", "6GiB", "8GiB", "10GiB", "12GiB", "16GiB")
 
 
 def _save_history() -> None:
@@ -100,6 +104,16 @@ def _completion_options(line: str, begidx: int, text: str) -> list[str]:
         return _resolution_options(tokens, text)
     if prev == "/lora":
         return _lora_options(tokens, text)
+    if prev == "/mem":
+        return [m for m in MEM_MODES if m.startswith(text)]
+    # `/mem max <size>` — suggest a few common caps when the user is
+    # completing the size token. ``/mem`` is GREEDY so the cursor may sit
+    # several tokens past `/mem`; finding "max" in the token history is
+    # the trigger.
+    if "max" in tokens and "/mem" in tokens:
+        mem_idx = tokens.index("/mem")
+        if "max" in tokens[mem_idx:] and tokens[-1] == "max":
+            return [s for s in _MEM_SIZE_HINTS if s.startswith(text)]
     return []
 
 

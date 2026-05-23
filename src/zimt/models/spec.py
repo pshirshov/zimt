@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 from ..buckets import Resolution, SDXL_BUCKETS
+from ..memory import MemStrategy
 from ..samplers import SDXL_SAMPLERS, SamplerEntry
 
 Family = Literal["sdxl", "zimage"]
@@ -73,8 +74,10 @@ class ModelSpec:
     score_tags: str = ""
     """Auto-prepended to the user's prompt unless ``/raw`` is used."""
 
-    load: Callable[[str], Any] = field(default=lambda _d: None)
-    """``load(device) -> diffusers pipeline``."""
+    load: Callable[[str, MemStrategy], Any] = field(
+        default=lambda _d, _m: None
+    )
+    """``load(device, mem) -> diffusers pipeline``."""
 
     tokenize_report: Callable[[Any, str], None] = field(default=lambda _p, _t: None)
     """``tokenize_report(pipe, text)`` — prints to stdout."""

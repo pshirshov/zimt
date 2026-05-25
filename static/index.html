@@ -21,6 +21,8 @@
       <div class="left-tabs" role="tablist" aria-label="left panel">
         <button class="ltab active" data-ltab="inference" role="tab"
                 aria-selected="true">inference</button>
+        <button class="ltab" data-ltab="prompts" role="tab"
+                aria-selected="false">prompts</button>
         <button class="ltab" data-ltab="models" role="tab"
                 aria-selected="false">models</button>
       </div>
@@ -33,6 +35,8 @@
           unload model
         </button>
       </div>
+      <button id="btn-toggle-outputs" type="button" class="pill outputs-toggle"
+              title="show/hide outputs panel" aria-pressed="true">outputs ◀</button>
     </div>
 
     <div class="lpane lpane-inference" data-ltab="inference">
@@ -71,12 +75,25 @@
           </h2>
           <ul class="queue-list" id="queue-list"></ul>
         </div>
+      </div>
+    </div>
+
+    <div class="lpane lpane-prompts" data-ltab="prompts" hidden>
+      <div class="left-content">
         <div class="section">
           <h2>
             <span>recent prompts</span>
-            <button id="btn-clear-recent" class="section-btn"
-                    title="clear recent prompts (localStorage only)">clear</button>
+            <span class="section-actions">
+              <button id="btn-recent-wrap" class="section-btn"
+                      type="button"
+                      title="toggle wrap / ellipse for long prompts">wrap</button>
+              <button id="btn-clear-recent" class="section-btn"
+                      title="clear non-favourite prompts (localStorage only)">clear</button>
+            </span>
           </h2>
+          <input id="recent-search" type="search" autocomplete="off"
+                 spellcheck="false" class="recent-search"
+                 placeholder="filter prompts (substring, case-insensitive)">
           <ul class="recent-list" id="recent-list"></ul>
         </div>
       </div>

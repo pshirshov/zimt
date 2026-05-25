@@ -211,6 +211,20 @@
               cursor: pointer; }
   .gpu-pill[aria-expanded="true"] { background: var(--accent); color: #000; }
 
+  /* Outputs show/hide toggle — rendered as a topbar pill, sits to the
+     right of the gpu-pill block. The chevron flips with state so the
+     button reads as the action it will perform. */
+  .outputs-toggle { font-family: ui-monospace, monospace; cursor: pointer;
+                    color: var(--fg); }
+  .outputs-toggle[aria-pressed="false"] { color: var(--muted); }
+  .outputs-toggle:hover { color: var(--accent); }
+
+  /* `.right` and `.splitter` are toggled via the `hidden` attribute by
+     the outputs-toggle button. The default browser `[hidden]` rule
+     gives display:none, but our `.right` already has display:flex set,
+     which beats display:none by specificity — so override explicitly. */
+  .right[hidden], .splitter[hidden] { display: none; }
+
   /* Dropdown menu anchored to the gpu pill. Position is set in JS
      via getBoundingClientRect on the pill, so the menu follows the
      pill across resize/scroll/responsive-layout shifts. */
@@ -318,11 +332,41 @@
   .queue-item .cancel-btn:hover { color: var(--error); border-color: var(--error); }
   .queue-item .cancel-btn:disabled { opacity: 0.4; cursor: wait; }
   .queue-item.status-canceled { background: #2e2630; opacity: 0.75; }
-  .recent-item { padding: 4px 8px; border-radius: 3px; cursor: pointer;
-    font: 12px ui-monospace, monospace; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; }
+  /* Filter input above the recent-prompts list. Plain text input
+     styled to fit the section's compact monospace look. */
+  .recent-search { width: 100%; margin-bottom: 6px;
+    font: 12px ui-monospace, monospace; padding: 4px 8px; }
+
+  /* Recent-prompt rows: ☆ fav · wrapped text · ✕ delete. The text
+     wraps to multiple lines; star + delete stay top-aligned so the row
+     reads consistently regardless of length. When the list is in
+     `ellipsed` mode the text collapses to a single ellipsed line. */
+  .recent-item { padding: 4px 6px; border-radius: 3px;
+    font: 12px ui-monospace, monospace;
+    display: flex; align-items: flex-start; gap: 6px; }
+  .recent-list.ellipsed .recent-item { align-items: center; }
+  .recent-list.ellipsed .recent-item .recent-text {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    word-break: normal; overflow-wrap: normal;
+  }
   .recent-item:hover { background: #2e2e38; }
-  .recent-item.showcase { font-style: italic; color: var(--muted); }
+  .recent-item.fav { background: rgba(255, 204, 68, 0.06); }
+  .recent-item.fav:hover { background: rgba(255, 204, 68, 0.12); }
+  .recent-item .recent-text { flex: 1 1 auto; min-width: 0; cursor: pointer;
+    white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+    padding: 2px 0; color: var(--fg); }
+  .recent-item .recent-fav, .recent-item .recent-del {
+    flex: 0 0 auto; background: transparent; border: none; padding: 2px 4px;
+    color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer;
+    border-radius: 3px; }
+  .recent-item .recent-fav:hover { color: #ffcc44; }
+  .recent-item .recent-fav.on { color: #ffcc44; }
+  .recent-item .recent-del:hover { color: var(--error); background: #3a2a2a; }
+  /* Showcase entries (shown only when history is empty) keep the old
+     single-line look — they're click-to-load examples, not real rows. */
+  .recent-item.showcase { font-style: italic; color: var(--muted);
+    cursor: pointer; display: block; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; padding: 4px 8px; }
   .recent-item.showcase:hover { color: var(--fg); }
   .recent-hint { padding: 2px 8px 4px; font: 11px ui-monospace, monospace;
     color: var(--muted); font-style: italic; }

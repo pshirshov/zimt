@@ -11,9 +11,34 @@ let modalEntry = null;
 let jobs = new Map();        // jobId -> job (preserve insertion order via Map)
 const MAX_QUEUE_SHOWN = 30;
 
+// Stored as [{text, fav}]. Legacy entries were bare strings — migrated
+// transparently on read. `recents()` returns the full object list (favs
+// kept untrimmed; non-favs capped at 50). `history()` returns just the
+// text array, in display order (favs first), for arrow-key history nav.
 const LS = {
-  history: () => JSON.parse(localStorage.getItem("zimt.history") || "[]"),
-  setHistory: (xs) => localStorage.setItem("zimt.history", JSON.stringify(xs.slice(0, 50))),
+  recents: () => {
+    const raw = JSON.parse(localStorage.getItem("zimt.history") || "[]");
+    const out = [];
+    const seen = new Set();
+    for (const e of raw) {
+      const o = typeof e === "string" ? { text: e, fav: false } : e;
+      if (!o || typeof o.text !== "string" || seen.has(o.text)) continue;
+      seen.add(o.text);
+      out.push({ text: o.text, fav: Boolean(o.fav) });
+    }
+    return out;
+  },
+  setRecents: (xs) => {
+    const favs = xs.filter(e => e.fav);
+    const rest = xs.filter(e => !e.fav).slice(0, 50);
+    localStorage.setItem("zimt.history", JSON.stringify([...favs, ...rest]));
+  },
+  history: () => {
+    const xs = LS.recents();
+    const favs = xs.filter(e => e.fav).map(e => e.text);
+    const rest = xs.filter(e => !e.fav).map(e => e.text);
+    return [...favs, ...rest];
+  },
 };
 
 // Shown in place of the empty history so a first-time user can see the
@@ -548,42 +573,131 @@ $("btn-clear-completed").onclick = async () => {
 $("btn-clear-log").onclick = () => { $("log").innerHTML = ""; };
 $("btn-refresh-models").onclick = () => refreshModels();
 $("btn-generate").onclick = () => submit();
-$("btn-clear-recent").onclick = () => {
-  if (!confirm("Clear all recent prompts? This only affects this browser.")) return;
-  LS.setHistory([]);
+// Recent-prompts UI state — declared here so the button wirings below
+// (and the initial `_syncWrapBtn()` call) can see them without TDZ.
+let recentSearch = "";
+let recentWrap = JSON.parse(localStorage.getItem("zimt.recent-wrap") || "true");
+$("recent-search").addEventListener("input", (ev) => {
+  recentSearch = ev.target.value;
   renderRecent();
-  appendLog("recent prompts cleared");
+});
+$("btn-recent-wrap").onclick = () => {
+  recentWrap = !recentWrap;
+  localStorage.setItem("zimt.recent-wrap", JSON.stringify(recentWrap));
+  _syncWrapBtn();
+  renderRecent();
+};
+function _syncWrapBtn() {
+  const btn = $("btn-recent-wrap");
+  btn.textContent = recentWrap ? "wrap" : "ellipse";
+  btn.setAttribute("aria-pressed", recentWrap ? "true" : "false");
+  btn.title = recentWrap
+    ? "currently wrapping long prompts — click to ellipse"
+    : "currently ellipsing long prompts — click to wrap";
+}
+_syncWrapBtn();
+$("btn-clear-recent").onclick = () => {
+  const xs = LS.recents();
+  const favs = xs.filter(e => e.fav);
+  const removed = xs.length - favs.length;
+  if (!removed) {
+    appendLog("nothing to clear (no non-favourite prompts)");
+    return;
+  }
+  if (!confirm(`Clear ${removed} non-favourite recent prompt(s)? Favourites are kept.`)) return;
+  LS.setRecents(favs);
+  renderRecent();
+  appendLog(`cleared ${removed} non-favourite prompt(s)`);
 };
 
 // ---------- recent prompts ----------
+// Each <li> is a row: ★ fav-toggle · prompt text · ✕ delete. Favourites
+// render first; within each group, insertion order (newest on top).
+// `recentSearch` (substring, case-insensitive) filters both groups in
+// place — favs that match still group above non-favs. Showcase prompts
+// only render when the user has no real history AND no active filter —
+// they're click-to-load examples, not stored entries.
 function renderRecent() {
   const root = $("recent-list"); root.innerHTML = "";
-  const history = LS.history();
-  const entries = history.length
-    ? history.map((p) => ({ text: p, showcase: false }))
-    : SHOWCASE_PROMPTS.map((p) => ({ text: p, showcase: true }));
-  if (!history.length) {
+  root.classList.toggle("ellipsed", !recentWrap);
+  const xs = LS.recents();
+  const q = recentSearch.trim().toLowerCase();
+  const matches = q ? xs.filter(e => e.text.toLowerCase().includes(q)) : xs;
+  if (!matches.length) {
     const hint = document.createElement("li");
     hint.className = "recent-hint";
+    if (q) {
+      hint.textContent = `no prompts match "${recentSearch}"`;
+      root.appendChild(hint);
+      return;
+    }
     hint.textContent = "no recent prompts — click one to load it:";
     root.appendChild(hint);
+    for (const text of SHOWCASE_PROMPTS) {
+      const li = document.createElement("li");
+      li.className = "recent-item showcase";
+      li.title = `example: ${text}`;
+      li.textContent = text;
+      li.onclick = () => loadPromptIntoInput(text);
+      root.appendChild(li);
+    }
+    return;
   }
-  for (const e of entries) {
-    const li = document.createElement("li");
-    li.className = "recent-item" + (e.showcase ? " showcase" : "");
-    li.title = e.showcase ? `example: ${e.text}` : e.text;
-    li.textContent = e.text;
-    li.onclick = () => {
-      $("prompt-input").value = e.text;
-      $("prompt-input").focus();
-      autoResize();
-    };
-    root.appendChild(li);
-  }
+  const favs = matches.filter(e => e.fav);
+  const rest = matches.filter(e => !e.fav);
+  for (const e of [...favs, ...rest]) root.appendChild(_recentItem(e));
+}
+function _recentItem(entry) {
+  const li = document.createElement("li");
+  li.className = "recent-item" + (entry.fav ? " fav" : "");
+  const starBtn = document.createElement("button");
+  starBtn.className = "recent-fav" + (entry.fav ? " on" : "");
+  starBtn.type = "button";
+  starBtn.title = entry.fav ? "unfavourite" : "favourite";
+  starBtn.textContent = entry.fav ? "★" : "☆";
+  starBtn.onclick = (ev) => { ev.stopPropagation(); toggleRecentFav(entry.text); };
+  const textSpan = document.createElement("span");
+  textSpan.className = "recent-text";
+  textSpan.textContent = entry.text;
+  textSpan.title = "click to load into prompt";
+  textSpan.onclick = () => loadPromptIntoInput(entry.text);
+  const delBtn = document.createElement("button");
+  delBtn.className = "recent-del";
+  delBtn.type = "button";
+  delBtn.title = "delete this prompt";
+  delBtn.textContent = "✕";
+  delBtn.onclick = (ev) => { ev.stopPropagation(); deleteRecent(entry.text); };
+  li.appendChild(starBtn);
+  li.appendChild(textSpan);
+  li.appendChild(delBtn);
+  return li;
+}
+function loadPromptIntoInput(text) {
+  $("prompt-input").value = text;
+  setLeftTab("inference");
+  $("prompt-input").focus();
+  autoResize();
+}
+function toggleRecentFav(text) {
+  const xs = LS.recents();
+  const e = xs.find(x => x.text === text);
+  if (!e) return;
+  e.fav = !e.fav;
+  LS.setRecents(xs);
+  renderRecent();
+}
+function deleteRecent(text) {
+  LS.setRecents(LS.recents().filter(e => e.text !== text));
+  renderRecent();
 }
 function pushRecent(p) {
-  const xs = LS.history().filter(x => x !== p);
-  xs.unshift(p); LS.setHistory(xs); renderRecent();
+  const xs = LS.recents();
+  const existing = xs.find(e => e.text === p);
+  const fav = existing ? existing.fav : false;
+  const without = xs.filter(e => e.text !== p);
+  without.unshift({ text: p, fav });
+  LS.setRecents(without);
+  renderRecent();
 }
 
 // ---------- modal ----------
@@ -1093,6 +1207,30 @@ async function submit({ keepValue = false } = {}) {
     appendLog(`exec: ${e.message}`, "error");
     if (!keepValue) { input.value = saved; autoResize(); }
   }
+}
+
+// ---------- outputs pane show/hide ----------
+// Hides both `.right` and the `.splitter` so the inference column gets
+// the full width. State persists in localStorage; the topbar pill is
+// the only affordance to bring it back.
+let outputsShown = JSON.parse(localStorage.getItem("zimt.outputs-shown") || "true");
+function applyOutputsShown() {
+  const right = $("right-pane");
+  const splitter = $("splitter");
+  const btn = $("btn-toggle-outputs");
+  right.hidden = !outputsShown;
+  splitter.hidden = !outputsShown;
+  btn.textContent = outputsShown ? "outputs ◀" : "outputs ▶";
+  btn.setAttribute("aria-pressed", outputsShown ? "true" : "false");
+  btn.title = outputsShown ? "hide outputs panel" : "show outputs panel";
+}
+function setupOutputsToggle() {
+  $("btn-toggle-outputs").onclick = () => {
+    outputsShown = !outputsShown;
+    localStorage.setItem("zimt.outputs-shown", JSON.stringify(outputsShown));
+    applyOutputsShown();
+  };
+  applyOutputsShown();
 }
 
 // ---------- splitter (drag-resizable right pane) ----------
@@ -1630,6 +1768,7 @@ function setupMobileTabs() {
 
 async function init() {
   renderRecent();
+  setupOutputsToggle();
   setupSplitter();
   setupMobileTabs();
   autoResize();

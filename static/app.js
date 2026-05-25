@@ -315,6 +315,7 @@ function fmtDownloadCounter(j) {
 }
 
 function renderQueue() {
+  renderQueueSummary();
   const root = $("queue-list");
   root.innerHTML = "";
   const arr = Array.from(jobs.values()).reverse();
@@ -427,6 +428,129 @@ function renderQueue() {
     }
     root.appendChild(li);
   }
+}
+
+// ---------- queue bottom panel ----------
+// Collapsed-state summary: counts of done / pending / errors plus a
+// single "current task" row with prompt + progress bar + elapsed time.
+// The summary is recomputed by renderQueueSummary() — called from
+// renderQueue() (event-driven WS updates) AND from a 1s tick while a
+// job is running so the elapsed-time counter advances even without
+// new step events. The tick auto-clears when nothing is running.
+let queuePinned = JSON.parse(localStorage.getItem("zimt.queue-pinned") || "false");
+let queueTickHandle = null;
+
+function _qPickRunning() {
+  for (const j of jobs.values()) if (j.status === "running") return j;
+  return null;
+}
+
+function _qCounts() {
+  let done = 0, queued = 0, running = 0, error = 0, canceled = 0;
+  for (const j of jobs.values()) {
+    if (j.status === "done") done++;
+    else if (j.status === "queued") queued++;
+    else if (j.status === "running") running++;
+    else if (j.status === "error") error++;
+    else if (j.status === "canceled") canceled++;
+  }
+  return { done, queued, running, error, canceled };
+}
+
+function _qSummaryRunningText(j) {
+  if (j.kind === "download") {
+    const phase = _dlPhase(j);
+    const parts = [phase, j.model];
+    if (phase === "downloading" && j.download_file) parts.push(j.download_file);
+    return parts.join(" · ");
+  }
+  return (j.full_prompt || j.raw_prompt || "(no prompt)").slice(0, 200);
+}
+
+function _qSummaryProgress(j) {
+  // Returns {pct, label} or null if no progress info available.
+  if (j.kind === "download") {
+    const bytesTotal = j.download_bytes_total || 0;
+    const filesTotal = j.download_files_total || 0;
+    const total = bytesTotal > 0 ? bytesTotal : filesTotal;
+    const n = bytesTotal > 0 ? (j.download_bytes_n || 0) : (j.download_files_n || 0);
+    if (total <= 0) return null;
+    return { pct: Math.min(100, Math.round(100 * n / total)),
+             label: `${n}/${total}` };
+  }
+  if ((j.total_steps || 0) > 0) {
+    return { pct: Math.min(100, Math.round(100 * j.step / j.total_steps)),
+             label: `${j.step}/${j.total_steps}` };
+  }
+  return null;
+}
+
+function renderQueueSummary() {
+  const counts = _qCounts();
+  const pending = counts.queued + counts.running;
+  const pieces = [];
+  if (counts.done) pieces.push(`${counts.done} done`);
+  if (pending) pieces.push(`${pending} pending`);
+  if (counts.error) pieces.push(`${counts.error} error`);
+  if (counts.canceled) pieces.push(`${counts.canceled} canceled`);
+  $("qsumm-counts").textContent =
+    pieces.length ? `queue: ${pieces.join(" · ")}` : "queue: idle";
+
+  const running = _qPickRunning();
+  const runRow = $("qsumm-running");
+  if (!running) {
+    runRow.hidden = true;
+    _stopQueueTick();
+    return;
+  }
+  runRow.hidden = false;
+  const promptText = _qSummaryRunningText(running);
+  $("qsumm-running-prompt").textContent = promptText;
+  $("qsumm-running-prompt").title = promptText;
+
+  const prog = _qSummaryProgress(running);
+  const bar = $("qsumm-running-bar");
+  if (prog) {
+    bar.hidden = false;
+    bar.title = prog.label;
+    $("qsumm-running-bar-fill").style.width = prog.pct + "%";
+  } else {
+    bar.hidden = true;
+  }
+
+  const startTs = running.ts_queued || 0;
+  const elapsed = startTs > 0 ? (Date.now() / 1000 - startTs) : 0;
+  $("qsumm-running-elapsed").textContent = fmtDuration(elapsed);
+
+  _startQueueTick();
+}
+
+function _startQueueTick() {
+  if (queueTickHandle !== null) return;
+  queueTickHandle = setInterval(renderQueueSummary, 1000);
+}
+function _stopQueueTick() {
+  if (queueTickHandle === null) return;
+  clearInterval(queueTickHandle);
+  queueTickHandle = null;
+}
+
+function setQueuePinned(pinned) {
+  queuePinned = pinned;
+  localStorage.setItem("zimt.queue-pinned", JSON.stringify(pinned));
+  applyQueuePinned();
+}
+function applyQueuePinned() {
+  const panel = $("queue-panel");
+  panel.classList.toggle("expanded", queuePinned);
+  panel.classList.toggle("collapsed", !queuePinned);
+  $("queue-full").hidden = !queuePinned;
+  $("queue-summary-row").hidden = queuePinned;
+}
+function setupQueuePin() {
+  $("btn-queue-pin").onclick = () => setQueuePinned(true);
+  $("btn-queue-unpin").onclick = () => setQueuePinned(false);
+  applyQueuePinned();
 }
 
 // ---------- error popup ----------
@@ -1769,6 +1893,8 @@ function setupMobileTabs() {
 async function init() {
   renderRecent();
   setupOutputsToggle();
+  setupQueuePin();
+  renderQueueSummary();
   setupSplitter();
   setupMobileTabs();
   autoResize();

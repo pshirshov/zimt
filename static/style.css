@@ -24,9 +24,13 @@
     50%      { opacity: 0.55; }
   }
 
+  /* body is a flex column: optional mobile-tabs strip, the main horizontal
+     layout (grows), then the bottom queue panel (fits its content).
+     `.layout`'s height comes from flex now, not 100vh. */
+  body { display: flex; flex-direction: column; }
   /* Top-level horizontal split: left column (everything) + splitter + right pane.
      Both columns are full-height; only their inner content areas scroll. */
-  .layout { display: flex; height: 100vh; min-height: 0; }
+  .layout { display: flex; flex: 1 1 auto; min-height: 0; }
   .left { flex: 1 1 auto; min-width: 240px; display: flex; flex-direction: column;
     min-height: 0; }
   .splitter { flex: 0 0 6px; background: var(--border); cursor: col-resize; }
@@ -301,6 +305,45 @@
   pre.state { margin: 0; padding: 10px 12px; background: #25252b; border-radius: 4px;
     font: 12px/1.5 ui-monospace, monospace; color: var(--fg); white-space: pre-wrap; }
   pre.state.empty { color: var(--muted); font-style: italic; }
+  /* Bottom-docked queue panel. Two states:
+     - .collapsed: single-line summary (counts + active job)
+     - .expanded:  the full queue list with cancel/clear controls
+     Toggled via #btn-queue-pin / #btn-queue-unpin and persisted in
+     localStorage. The summary row always rebuilds from `jobs` on
+     every renderQueue(), so the collapsed view never goes stale. */
+  .queue-panel { flex: 0 0 auto; background: var(--panel);
+    border-top: 1px solid var(--border);
+    font: 12px ui-monospace, monospace; }
+  .queue-panel.collapsed .queue-full { display: none; }
+  .queue-panel.expanded  .queue-summary-row { display: none; }
+  .queue-summary-row { display: flex; align-items: center; gap: 10px;
+    padding: 4px 12px; min-height: 28px; }
+  .qsumm-counts { color: var(--muted); white-space: nowrap; flex: 0 0 auto; }
+  .qsumm-running { display: flex; align-items: center; gap: 8px;
+    flex: 1 1 auto; min-width: 0; color: var(--fg); }
+  .qsumm-running-label { color: var(--muted); flex: 0 0 auto; }
+  .qsumm-running-prompt { flex: 1 1 auto; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qsumm-running-bar { flex: 0 0 80px; height: 5px; background: #1a1a1f;
+    border-radius: 2px; overflow: hidden; display: block; }
+  .qsumm-running-bar-fill { display: block; height: 100%; background: var(--accent);
+    width: 0%; transition: width 120ms linear; }
+  .qsumm-running-elapsed { flex: 0 0 auto; color: var(--muted);
+    font-variant-numeric: tabular-nums; }
+  .queue-pin { flex: 0 0 auto; background: transparent;
+    border: 1px solid var(--border); color: var(--muted);
+    font: 11px ui-monospace, monospace; padding: 2px 8px;
+    border-radius: 3px; cursor: pointer; margin-left: auto; }
+  .queue-pin:hover { color: var(--fg); border-color: var(--accent); }
+  .queue-full { padding: 8px 12px 10px; max-height: 40vh; overflow-y: auto;
+    border-top: 1px solid var(--border); }
+  .queue-header { display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px; }
+  .queue-title { color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.06em; font-size: 11px; font-weight: 500; }
+  .queue-full .section-actions { display: flex; gap: 4px; }
+  .queue-full .queue-pin { margin-left: 8px; }
+
   .queue-list, .recent-list { list-style: none; padding: 0; margin: 0;
     display: flex; flex-direction: column; gap: 3px; }
   .queue-item { padding: 5px 8px; border-radius: 3px; background: #25252b;

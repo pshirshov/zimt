@@ -634,6 +634,13 @@ function renderThumbs() {
     star.title = e.fav ? "remove favorite" : "favorite";
     star.onclick = (ev) => { ev.stopPropagation(); toggleFavorite(e); };
     d.appendChild(star);
+    // Right column, below the star: copy full image to clipboard.
+    const copy = document.createElement("button");
+    copy.className = "copy-btn";
+    copy.textContent = "⧉";
+    copy.title = "copy full image to clipboard";
+    copy.onclick = (ev) => { ev.stopPropagation(); copyImageToClipboard(e, copy); };
+    d.appendChild(copy);
     d.onclick = () => openModal(e);
     root.appendChild(d);
   }
@@ -642,6 +649,32 @@ function renderThumbs() {
 async function toggleFavorite(entry) {
   try { await wsRequest("output_favorite", { name: entry.name, favorite: !entry.fav }); }
   catch (e) { appendLog(`favorite: ${e.message}`, "error"); }
+}
+// Copy the full (non-thumbnail) image to the OS clipboard as image/png.
+// The Clipboard API needs a Promise<Blob> handed to ClipboardItem so the
+// fetch can run inside the user-gesture context — passing an already-
+// resolved blob works in modern browsers but the Promise form is the
+// portable spelling that Safari requires.
+async function copyImageToClipboard(entry, btn) {
+  const prev = btn.textContent;
+  btn.disabled = true;
+  try {
+    const url = `/api/outputs/${encodeURIComponent(entry.name)}`;
+    const blob = await fetch(url).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.blob();
+    });
+    await navigator.clipboard.write([
+      new ClipboardItem({ [blob.type || "image/png"]: blob }),
+    ]);
+    btn.textContent = "✓";
+    appendLog(`copied ${entry.name} to clipboard`);
+  } catch (err) {
+    btn.textContent = "✕";
+    appendLog(`copy: ${err.message}`, "error");
+  } finally {
+    setTimeout(() => { btn.textContent = prev; btn.disabled = false; }, 1200);
+  }
 }
 async function loadOutputs(tab, page) {
   return wsRequest("outputs_list", { tab, page, per_page: 60 });

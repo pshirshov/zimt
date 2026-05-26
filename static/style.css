@@ -479,6 +479,12 @@
     border: none; color: #fff; font-size: 14px; line-height: 1;
     border-radius: 50%; width: 22px; height: 22px; padding: 0; }
   .star-btn.on { color: #ffcc44; }
+  /* Copy-to-clipboard sits directly below the star, same right edge. */
+  .copy-btn { position: absolute; top: 30px; right: 4px; background: rgba(0,0,0,0.55);
+    border: none; color: #fff; font-size: 14px; line-height: 1;
+    border-radius: 50%; width: 22px; height: 22px; padding: 0; }
+  .copy-btn:hover:not(:disabled) { color: var(--accent); }
+  .copy-btn:disabled { opacity: 0.5; cursor: default; }
   /* Three stacked buttons down the left edge of each thumbnail. Top to
      bottom: fill-command-line (verbatim 1:1 round-trip), restore-no-seed
      (re-roll a new random seed), restore-with-seed (pin the original

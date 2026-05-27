@@ -1359,7 +1359,8 @@ async function submit({ keepValue = false } = {}) {
     hideSuggest();
     autoResize();
   }
-  try { await wsRequest("exec", { line }); }
+  const sentLine = applyGlobalsToLine(line);
+  try { await wsRequest("exec", { line: sentLine }); }
   catch (e) {
     appendLog(`exec: ${e.message}`, "error");
     if (!keepValue) { input.value = saved; autoResize(); }
@@ -1515,6 +1516,106 @@ function _initGpuMenu() {
                          { passive: true });
 }
 _initGpuMenu();
+
+// ---------- globals editor ----------
+// A persistent block of template variable definitions (e.g.
+//   ${shoes=[runners|sneakers|high heels|platform boots]}
+// ) that's spliced into every generation line at submit time. Lives in
+// localStorage under `zimt.globals`. The textarea/highlight pair mirrors
+// the prompt editor's overlay technique so the same syntax highlighter
+// (renderPromptHTML) paints both.
+//
+// Injection rules — see CLAUDE.md `src/zimt/repl/commands.py` for the
+// command-line grammar that drives placement:
+//   * If the line carries a non-empty prompt portion (anything that
+//     isn't a known /cmd or its args), splice globals in. Otherwise
+//     skip — globals belong with generation, not with bare settings
+//     commands like `/cfg 7`.
+//   * Placement: after `/model <name>` if present, otherwise prepended.
+//     The parser treats any non-command token anywhere on the line as
+//     prompt text, so positioning is cosmetic — but "after /model X"
+//     reads naturally and keeps the user's typed prompt intact.
+const GLOBALS_LS_KEY = "zimt.globals";
+// Arity table mirrors COMMAND_ARITY in src/zimt/repl/commands.py. Kept
+// inline so we don't have to thread it through every static file; the
+// completion-contract test catches command-list drift.
+const _GLOBALS_ARITY = {
+  "/help": 0, "/?": 0, "/quit": 0, "/exit": 0, "/q": 0,
+  "/model": 1, "/cfg": 1, "/steps": 1, "/seed": 1, "/res": 1,
+  "/clip_skip": 1, "/sampler": 1, "/size": 2,
+  "/raw": 0,
+  "/many": "MANY",
+  "/negprompt": "GREEDY", "/tokenize": "GREEDY",
+  "/lora": 1,
+  "/mem": "GREEDY",
+};
+function _linePromptAcc(line) {
+  const toks = line.split(/\s+/).filter(Boolean);
+  const acc = [];
+  let i = 0;
+  while (i < toks.length) {
+    const t = toks[i];
+    if (!(t in _GLOBALS_ARITY)) { acc.push(t); i += 1; continue; }
+    const a = _GLOBALS_ARITY[t];
+    if (a === 0) { i += 1; continue; }
+    if (a === "GREEDY") {
+      i += 1;
+      while (i < toks.length && !(toks[i] in _GLOBALS_ARITY)) i += 1;
+      continue;
+    }
+    if (a === "MANY") {
+      i += 1;
+      if (i < toks.length) i += 1; // N
+      // /many's greedy arg is the prompt (see exec_api.py /many branch).
+      // Treat those tokens as prompt content so a line like
+      // `/many 4 a cute girl` still triggers globals injection.
+      while (i < toks.length && !(toks[i] in _GLOBALS_ARITY)) {
+        acc.push(toks[i]);
+        i += 1;
+      }
+      continue;
+    }
+    i += 1 + a; // fixed arity
+  }
+  return acc.join(" ");
+}
+function getGlobalsText() {
+  return localStorage.getItem(GLOBALS_LS_KEY) || "";
+}
+function applyGlobalsToLine(line) {
+  const g = getGlobalsText().trim();
+  if (!g) return line;
+  // Skip injection when the line has no prompt portion — no generation
+  // will be triggered, so globals would be noise.
+  if (!_linePromptAcc(line)) return line;
+  // Normalise globals: collapse any internal newlines/tabs to single
+  // spaces. The line itself stays single-line because the textarea is
+  // submitted as-is.
+  const flat = g.replace(/\s+/g, " ").trim();
+  // Insert after `/model <name>` if present. Match the first occurrence
+  // at a word boundary; trailing token is the model name.
+  const re = /(?:^|\s)\/model\s+\S+/;
+  const m = re.exec(line);
+  if (m) {
+    const at = m.index + m[0].length;
+    return line.slice(0, at) + " " + flat + line.slice(at);
+  }
+  return flat + " " + line;
+}
+function _initGlobalsEditor() {
+  const ta = $("globals-input");
+  const hl = $("globals-highlight");
+  if (!ta || !hl) return;
+  ta.value = getGlobalsText();
+  const render = () => { hl.innerHTML = renderPromptHTML(ta.value); };
+  render();
+  ta.addEventListener("input", () => {
+    localStorage.setItem(GLOBALS_LS_KEY, ta.value);
+    render();
+  });
+  ta.addEventListener("scroll", () => { hl.scrollTop = ta.scrollTop; });
+}
+_initGlobalsEditor();
 
 // ---------- left-column tab switcher (inference / models) ----------
 let leftTab = "inference";

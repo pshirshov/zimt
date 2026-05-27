@@ -23,6 +23,8 @@
                 aria-selected="true">inference</button>
         <button class="ltab" data-ltab="prompts" role="tab"
                 aria-selected="false">prompts</button>
+        <button class="ltab" data-ltab="globals" role="tab"
+                aria-selected="false">globals</button>
         <button class="ltab" data-ltab="models" role="tab"
                 aria-selected="false">models</button>
       </div>
@@ -83,6 +85,26 @@
                  spellcheck="false" class="recent-search"
                  placeholder="filter prompts (substring, case-insensitive)">
           <ul class="recent-list" id="recent-list"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="lpane lpane-globals" data-ltab="globals" hidden>
+      <div class="globals-pane">
+        <div class="globals-header">
+          <h2 style="margin: 0;">globals</h2>
+          <span class="globals-hint">
+            Template definitions injected into every prompt at submit time
+            (after <code>/model X</code> if present, otherwise prepended).
+            Use <code>${name=value}</code> or
+            <code>${name=`verbatim`}</code>. Auto-saved to localStorage.
+          </span>
+        </div>
+        <div class="textarea-wrap globals-wrap">
+          <pre id="globals-highlight" class="prompt-highlight" aria-hidden="true"></pre>
+          <textarea id="globals-input" autocomplete="off" autocapitalize="off"
+                    spellcheck="false"
+                    placeholder="${shoes=[runners|sneakers|high heels|platform boots]}&#10;${hair=`[red|blonde|brunette]`}"></textarea>
         </div>
       </div>
     </div>

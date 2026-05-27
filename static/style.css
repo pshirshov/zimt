@@ -545,3 +545,38 @@
     .modal-inner { flex-direction: column; }
     .modal-side { flex: 0 0 auto; }
   }
+
+  /* Globals tab: textarea + highlight overlay that fills the pane. Mirrors
+     the .prompt-highlight / .prompt-bar textarea styling so the caret in
+     #globals-input lines up with the painted tokens in #globals-highlight. */
+  .globals-pane { display: flex; flex-direction: column; height: 100%;
+    padding: 10px 14px; gap: 8px; min-height: 0; }
+  .globals-header { display: flex; align-items: baseline; gap: 12px;
+    flex: 0 0 auto; }
+  .globals-header h2 { font-size: 13px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+  .globals-hint { font-size: 11px; color: var(--muted); line-height: 1.4;
+    flex: 1 1 auto; }
+  .globals-hint code { background: #2e2e38; padding: 1px 4px;
+    border-radius: 3px; font: 11px ui-monospace, monospace; }
+  .globals-wrap { flex: 1 1 auto; min-height: 0; }
+  #globals-highlight, #globals-input {
+    margin: 0; padding: 10px 12px;
+    font: 14px/1.4 ui-monospace, monospace;
+    border: 1px solid var(--border); border-radius: 4px;
+    box-sizing: border-box;
+    white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word;
+  }
+  #globals-highlight {
+    position: absolute; inset: 0;
+    background: var(--panel); color: var(--fg);
+    pointer-events: none; overflow: hidden;
+    z-index: 0;
+  }
+  #globals-input {
+    position: absolute; inset: 0;
+    background: transparent; color: transparent;
+    caret-color: var(--fg);
+    resize: none; overflow-y: auto;
+    z-index: 1;
+  }

@@ -1270,6 +1270,16 @@ input.addEventListener("blur", () => {
 });
 
 input.addEventListener("keydown", (e) => {
+  // Ctrl/Cmd+/ — toggle line comments over the selection (or cursor line).
+  if (e.key === "/" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    const r = toggleComment(input.value, input.selectionStart, input.selectionEnd);
+    input.value = r.value;
+    input.setSelectionRange(r.selectionStart, r.selectionEnd);
+    autoResize();
+    updateSuggest();
+    return;
+  }
   // Tab / Shift-Tab — popup cycling. Open the popup if it isn't already.
   if (e.key === "Tab") {
     e.preventDefault();
@@ -1640,6 +1650,16 @@ function _initGlobalsEditor() {
   ta.addEventListener("input", () => {
     localStorage.setItem(GLOBALS_LS_KEY, ta.value);
     render();
+  });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "/" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      const r = toggleComment(ta.value, ta.selectionStart, ta.selectionEnd);
+      ta.value = r.value;
+      ta.setSelectionRange(r.selectionStart, r.selectionEnd);
+      localStorage.setItem(GLOBALS_LS_KEY, ta.value);
+      render();
+    }
   });
   ta.addEventListener("scroll", () => { hl.scrollTop = ta.scrollTop; });
 }

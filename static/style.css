@@ -343,23 +343,30 @@
   .queue-panel.expanded  .queue-summary-row { display: none; }
   .queue-summary-row { display: flex; align-items: center; gap: 10px;
     padding: 4px 12px; min-height: 28px; }
+  /* Badges sit at the far left; `margin-right: auto` pushes everything that
+     follows (bars + cancel-all + pin) to the right edge. This is the single
+     right-push for the row — the pin's own margin-left:auto is cancelled in
+     this context (below) so the two don't split the free space. */
   .qsumm-badges { display: flex; align-items: center; gap: 6px;
-    flex: 0 0 auto; }
+    flex: 0 0 auto; margin-right: auto; }
   .qbadge { padding: 1px 8px; border-radius: 10px; white-space: nowrap;
     font-size: 11px; border: 1px solid var(--border); }
   .qbadge-done { color: var(--muted); }
   .qbadge-pending { color: var(--fg); }
+  /* Bars shrink (never grow) when the row is tight so they stay inside their
+     own box rather than overflowing on top of the buttons. */
   .qsumm-bars { display: flex; align-items: center; gap: 14px;
-    flex: 1 1 auto; min-width: 0; margin-left: auto;
-    justify-content: flex-end; }
+    flex: 0 1 auto; min-width: 0; justify-content: flex-end; }
   .qsumm-bar-group { display: flex; align-items: center; gap: 6px;
     flex: 0 1 auto; min-width: 0; }
   .qsumm-bar-label { flex: 0 0 auto; color: var(--muted);
     font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .qsumm-bar { flex: 0 0 120px; height: 5px; background: #1a1a1f;
-    border-radius: 2px; overflow: hidden; display: block; }
+  .qsumm-bar { flex: 0 1 120px; min-width: 24px; height: 5px;
+    background: #1a1a1f; border-radius: 2px; overflow: hidden; display: block; }
   .qsumm-bar-fill { display: block; height: 100%; background: var(--accent);
     width: 0%; transition: width 120ms linear; }
+  #btn-cancel-all-summary { flex: 0 0 auto; }
+  .queue-summary-row .queue-pin { flex: 0 0 auto; margin-left: 0; }
   .queue-pin { flex: 0 0 auto; background: transparent;
     border: 1px solid var(--border); color: var(--muted);
     font: 11px ui-monospace, monospace; padding: 2px 8px;

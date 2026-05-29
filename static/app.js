@@ -546,6 +546,21 @@ function setupQueuePin() {
   applyQueuePinned();
 }
 
+// ---------- collapsible state panel ----------
+let stateCollapsed = JSON.parse(localStorage.getItem("zimt.state-collapsed") || "false");
+function applyStateCollapsed() {
+  $("state-panel").classList.toggle("collapsed", stateCollapsed);
+  $("state-toggle").setAttribute("aria-expanded", String(!stateCollapsed));
+}
+function setupStatePanel() {
+  $("state-toggle").onclick = () => {
+    stateCollapsed = !stateCollapsed;
+    localStorage.setItem("zimt.state-collapsed", JSON.stringify(stateCollapsed));
+    applyStateCollapsed();
+  };
+  applyStateCollapsed();
+}
+
 // ---------- error popup ----------
 function showJobError(j) {
   $("error-popup-text").textContent = j.error || "(no error message)";
@@ -2041,6 +2056,7 @@ async function init() {
   renderRecent();
   setupOutputsToggle();
   setupQueuePin();
+  setupStatePanel();
   renderQueueSummary();
   setupSplitter();
   setupMobileTabs();

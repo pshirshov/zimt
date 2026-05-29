@@ -53,18 +53,26 @@
           </div>
           <button id="btn-generate" class="gen-btn" title="generate (Enter)">gen</button>
         </div>
-        <div class="log-row">
-          <div id="log"></div>
-          <button id="btn-clear-log" class="section-btn"
-                  title="clear command output">clear</button>
+      </div>
+
+      <div class="state-panel" id="state-panel">
+        <button type="button" class="state-toggle" id="state-toggle"
+                aria-expanded="true" title="collapse / expand state">
+          <span class="state-caret" aria-hidden="true">▾</span>
+          <span>state</span>
+        </button>
+        <div class="state-body" id="state-body">
+          <pre id="state-text" class="state empty">no model loaded</pre>
         </div>
       </div>
 
-      <div class="left-content">
-        <div class="section">
-          <h2><span>state</span></h2>
-          <pre id="state-text" class="state empty">no model loaded</pre>
+      <div class="output-region">
+        <div class="output-header">
+          <span class="output-title">command output</span>
+          <button id="btn-clear-log" class="section-btn"
+                  title="clear command output">clear</button>
         </div>
+        <div id="log" class="log-scroll"></div>
       </div>
     </div>
 

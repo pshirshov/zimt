@@ -224,15 +224,26 @@
 
 <div class="queue-panel collapsed" id="queue-panel">
   <div class="queue-summary-row" id="queue-summary-row">
-    <span class="qsumm-counts" id="qsumm-counts">queue: idle</span>
-    <span class="qsumm-running" id="qsumm-running" hidden>
-      <span class="qsumm-running-label">running:</span>
-      <span class="qsumm-running-prompt" id="qsumm-running-prompt"></span>
-      <span class="qsumm-running-bar" id="qsumm-running-bar" hidden>
-        <span class="qsumm-running-bar-fill" id="qsumm-running-bar-fill"></span>
-      </span>
-      <span class="qsumm-running-elapsed" id="qsumm-running-elapsed"></span>
+    <span class="qsumm-badges">
+      <span class="qbadge qbadge-done" id="qsumm-done">done: 0</span>
+      <span class="qbadge qbadge-pending" id="qsumm-pending">pending: 0</span>
     </span>
+    <span class="qsumm-bars" id="qsumm-bars" hidden>
+      <span class="qsumm-bar-group" title="overall queue progress">
+        <span class="qsumm-bar-label" id="qsumm-total-label"></span>
+        <span class="qsumm-bar">
+          <span class="qsumm-bar-fill" id="qsumm-total-bar-fill"></span>
+        </span>
+      </span>
+      <span class="qsumm-bar-group" id="qsumm-current-group" title="current task progress">
+        <span class="qsumm-bar-label" id="qsumm-current-label"></span>
+        <span class="qsumm-bar">
+          <span class="qsumm-bar-fill" id="qsumm-current-bar-fill"></span>
+        </span>
+      </span>
+    </span>
+    <button id="btn-cancel-all-summary" type="button" class="section-btn"
+            title="cancel every queued or running job" hidden>cancel all</button>
     <button id="btn-queue-pin" type="button" class="queue-pin"
             title="pin queue panel open">▲ pin</button>
   </div>

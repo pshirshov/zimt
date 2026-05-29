@@ -457,16 +457,6 @@ function _qCounts() {
   return { done, queued, running, error, canceled };
 }
 
-function _qSummaryRunningText(j) {
-  if (j.kind === "download") {
-    const phase = _dlPhase(j);
-    const parts = [phase, j.model];
-    if (phase === "downloading" && j.download_file) parts.push(j.download_file);
-    return parts.join(" · ");
-  }
-  return (j.full_prompt || j.raw_prompt || "(no prompt)").slice(0, 200);
-}
-
 function _qSummaryProgress(j) {
   // Returns {pct, label} or null if no progress info available.
   if (j.kind === "download") {
@@ -488,41 +478,44 @@ function _qSummaryProgress(j) {
 function renderQueueSummary() {
   const counts = _qCounts();
   const pending = counts.queued + counts.running;
-  const pieces = [];
-  if (counts.done) pieces.push(`${counts.done} done`);
-  if (pending) pieces.push(`${pending} pending`);
-  if (counts.error) pieces.push(`${counts.error} error`);
-  if (counts.canceled) pieces.push(`${counts.canceled} canceled`);
-  $("qsumm-counts").textContent =
-    pieces.length ? `queue: ${pieces.join(" · ")}` : "queue: idle";
+  const finished = counts.done + counts.error + counts.canceled;
+  const total = finished + pending;
 
-  const running = _qPickRunning();
-  const runRow = $("qsumm-running");
-  if (!running) {
-    runRow.hidden = true;
+  $("qsumm-done").textContent = `done: ${counts.done}`;
+  $("qsumm-pending").textContent = `pending: ${pending}`;
+
+  // Progress bars and cancel-all only make sense while there's work in
+  // flight. With nothing pending the batch is over, so hide them.
+  const bars = $("qsumm-bars");
+  const cancelAll = $("btn-cancel-all-summary");
+  if (pending === 0) {
+    bars.hidden = true;
+    cancelAll.hidden = true;
     _stopQueueTick();
     return;
   }
-  runRow.hidden = false;
-  const promptText = _qSummaryRunningText(running);
-  $("qsumm-running-prompt").textContent = promptText;
-  $("qsumm-running-prompt").title = promptText;
+  bars.hidden = false;
+  cancelAll.hidden = false;
 
-  const prog = _qSummaryProgress(running);
-  const bar = $("qsumm-running-bar");
+  // Total progress: finished jobs out of all jobs (e.g. 18/20).
+  $("qsumm-total-label").textContent = `${finished}/${total}`;
+  const totalPct = total > 0 ? Math.round(100 * finished / total) : 0;
+  $("qsumm-total-bar-fill").style.width = totalPct + "%";
+
+  // Current-task progress: step/byte progress of the running job.
+  const running = _qPickRunning();
+  const prog = running ? _qSummaryProgress(running) : null;
+  const curGroup = $("qsumm-current-group");
   if (prog) {
-    bar.hidden = false;
-    bar.title = prog.label;
-    $("qsumm-running-bar-fill").style.width = prog.pct + "%";
+    curGroup.hidden = false;
+    $("qsumm-current-label").textContent = prog.label;
+    $("qsumm-current-bar-fill").style.width = prog.pct + "%";
   } else {
-    bar.hidden = true;
+    curGroup.hidden = true;
   }
 
-  const startTs = running.ts_queued || 0;
-  const elapsed = startTs > 0 ? (Date.now() / 1000 - startTs) : 0;
-  $("qsumm-running-elapsed").textContent = fmtDuration(elapsed);
-
-  _startQueueTick();
+  if (running) _startQueueTick();
+  else _stopQueueTick();
 }
 
 function _startQueueTick() {
@@ -715,12 +708,14 @@ $("btn-cleanup-outputs").onclick = async () => {
     await refreshOutputs();
   } catch (e) { appendLog(`cleanup: ${e.message}`, "error"); }
 };
-$("btn-cancel-all").onclick = async () => {
+async function _cancelAllJobs() {
   try {
     const r = await wsRequest("jobs_cancel_all");
     appendLog(`canceled ${r.canceled} jobs`);
   } catch (e) { appendLog(`cancel-all: ${e.message}`, "error"); }
-};
+}
+$("btn-cancel-all").onclick = _cancelAllJobs;
+$("btn-cancel-all-summary").onclick = _cancelAllJobs;
 $("btn-clear-completed").onclick = async () => {
   try {
     const r = await wsRequest("jobs_clear_completed");
@@ -968,10 +963,22 @@ function restoreToPrompt(entry, options = {}) {
 function fillCommandLine(entry) {
   const line = entry?.metadata?.command_line;
   if (!line) return;
-  $("prompt-input").value = line;
+  $("prompt-input").value = stripInjectedGlobals(line);
   autoResize();
   $("modal").classList.remove("open");
   $("prompt-input").focus();
+}
+// applyGlobalsToLine() splices the active globals into the sent line wrapped
+// in `<!-- globals:begin -->`/`<!-- globals:end -->` markers, and that sent
+// line is what gets recorded as command_line. A 1:1 restore should show the
+// user's original input, so strip the marker-delimited region (and the
+// markers) back out. The marker constants are declared further down, so build
+// the regex lazily to avoid the temporal-dead-zone reference at load time.
+// The markers contain no regex metacharacters.
+function stripInjectedGlobals(line) {
+  const re = new RegExp(
+    `\\s*${GLOBALS_BEGIN_MARKER}[\\s\\S]*?${GLOBALS_END_MARKER}\\s*`, "g");
+  return line.replace(re, " ").trim();
 }
 $("modal-restore").onclick = () => restoreToPrompt(modalEntry);
 
@@ -1536,6 +1543,8 @@ _initGpuMenu();
 //     prompt text, so positioning is cosmetic — but "after /model X"
 //     reads naturally and keeps the user's typed prompt intact.
 const GLOBALS_LS_KEY = "zimt.globals";
+const GLOBALS_BEGIN_MARKER = "<!-- globals:begin -->";
+const GLOBALS_END_MARKER = "<!-- globals:end -->";
 // Arity table mirrors COMMAND_ARITY in src/zimt/repl/commands.py. Kept
 // inline so we don't have to thread it through every static file; the
 // completion-contract test catches command-list drift.
@@ -1592,15 +1601,19 @@ function applyGlobalsToLine(line) {
   // spaces. The line itself stays single-line because the textarea is
   // submitted as-is.
   const flat = g.replace(/\s+/g, " ").trim();
+  // Wrap the injected globals in dynamics comment markers so the spliced
+  // region is identifiable in the sent prompt. `<!-- ... -->` is stripped
+  // by the dynamics parser, so the markers never reach the model.
+  const wrapped = `${GLOBALS_BEGIN_MARKER} ${flat} ${GLOBALS_END_MARKER}`;
   // Insert after `/model <name>` if present. Match the first occurrence
   // at a word boundary; trailing token is the model name.
   const re = /(?:^|\s)\/model\s+\S+/;
   const m = re.exec(line);
   if (m) {
     const at = m.index + m[0].length;
-    return line.slice(0, at) + " " + flat + line.slice(at);
+    return line.slice(0, at) + " " + wrapped + line.slice(at);
   }
-  return flat + " " + line;
+  return wrapped + " " + line;
 }
 function _initGlobalsEditor() {
   const ta = $("globals-input");

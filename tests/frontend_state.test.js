@@ -573,3 +573,33 @@ test("D18: each /lora token in the restored line is parseable by the arity-1 rul
     }
   }
 });
+
+// ---------- 1:1 restore strips injected globals via markers ----------
+
+test("stripInjectedGlobals removes a start-inserted globals region", () => {
+  const app = loadApp();
+  const line = "<!-- globals:begin --> ${q=masterpiece} <!-- globals:end --> a girl, score_9";
+  assert.equal(app.stripInjectedGlobals(line), "a girl, score_9");
+});
+
+test("stripInjectedGlobals removes a globals region inserted after /model", () => {
+  const app = loadApp();
+  const line = "/model pony <!-- globals:begin --> ${q=x} <!-- globals:end --> a girl";
+  assert.equal(app.stripInjectedGlobals(line), "/model pony a girl");
+});
+
+test("stripInjectedGlobals leaves a line without markers untouched", () => {
+  const app = loadApp();
+  const line = "/model pony a girl, score_9";
+  assert.equal(app.stripInjectedGlobals(line), line);
+});
+
+test("fillCommandLine restores command_line with injected globals stripped", () => {
+  const app = loadApp();
+  app.fillCommandLine({
+    metadata: {
+      command_line: "<!-- globals:begin --> ${q=x} <!-- globals:end --> a girl",
+    },
+  });
+  assert.equal(app.document.getElementById("prompt-input").value, "a girl");
+});

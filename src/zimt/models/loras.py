@@ -45,4 +45,18 @@ LORAS: dict[str, LoraSpec] = {
         default_weight=0.9,
         trigger_tags="Studio Ghibli Style",
     ),
+
+    # ---- Z-Image-Turbo LoRAs ----
+    # The repo ships two training checkpoints; pin the later one. Adult/NSFW
+    # content — apache-2.0 licensed. Trigger word is 'pronmstr'.
+    "zimage-pornmaster": LoraSpec(
+        name="zimage-pornmaster",
+        description="Pornmaster v1 — uncensored/NSFW realism for Z-Image-Turbo. Trigger 'pronmstr'.",
+        repo_id="RomixERR/Pornmaster_v1-Z-Images-Turbo",
+        family="zimage",
+        compatible_with=["zimage"],
+        weight_name="Pornmaster_v1_000044700.safetensors",
+        default_weight=0.8,
+        trigger_tags="pronmstr",
+    ),
 }

@@ -27,7 +27,7 @@ from .device import DEVICE
 from .dynamics import DynamicsSyntaxError, expand, has_dynamics
 from .memory import MemStrategy
 from .models.loras import LORAS
-from .models.spec import ModelSpec
+from .models.spec import LORA_FAMILIES, ModelSpec
 from .paths import OUT_DIR
 from .samplers import apply_sampler
 from .weighting import encode_sdxl, has_weighting
@@ -129,10 +129,10 @@ def _pnginfo(
     info.add_text("height", str(g.height))
     info.add_text("dtype", "bfloat16")
     info.add_text("device", DEVICE)
-    # Only SDXL actually applies the stack (see _apply_lora_stack); for
-    # non-SDXL families the LoRAs are skipped, so the PNG must not claim
-    # they were used. (PR-10-D02)
-    if g.spec.family == "sdxl" and g.lora_stack:
+    # Only LoRA-capable families actually apply the stack (see
+    # _apply_lora_stack); other families skip the LoRAs, so the PNG must not
+    # claim they were used. (PR-10-D02)
+    if g.spec.family in LORA_FAMILIES and g.lora_stack:
         info.add_text("loras", ",".join(f"{n}:{w}" for n, w in g.lora_stack))
     return info
 
@@ -150,8 +150,8 @@ def _apply_lora_stack(pipe: Any, g: GenConfig) -> None:
     loaded set resets implicitly with it. We also cache the last applied
     stack so we can skip set_adapters when the stack hasn't changed.
     """
-    if g.spec.family != "sdxl":
-        # ZImagePipeline doesn't currently expose set_adapters.
+    if g.spec.family not in LORA_FAMILIES:
+        # flux/flux2 load fp8-quantized; PEFT can't inject into quanto layers.
         if g.lora_stack:
             _log.warning(
                 "lora: family=%s does not support LoRA stacking; "

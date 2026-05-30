@@ -19,6 +19,13 @@ from ..samplers import SDXL_SAMPLERS, SamplerEntry
 
 Family = Literal["sdxl", "zimage", "flux", "flux2"]
 
+# Families whose pipelines accept PEFT LoRA stacking (load_lora_weights +
+# set_adapters) as loaded by zimt. `sdxl` and `zimage` load unquantized, so
+# adapters inject cleanly. `flux`/`flux2` load fp8-quantized (quanto) — PEFT
+# can't inject into quantized Linear layers — so they're excluded until a
+# fuse-into-bf16-then-quantize path exists.
+LORA_FAMILIES: frozenset[str] = frozenset({"sdxl", "zimage"})
+
 
 @dataclass
 class ModelSpec:

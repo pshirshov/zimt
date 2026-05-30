@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from .models.loras import LORAS
-from .models.spec import ModelSpec
+from .models.spec import LORA_FAMILIES, ModelSpec
 
 
 class LoraCmdError(ValueError):
@@ -70,7 +70,7 @@ def apply_lora_args(
         if spec is None:
             log.append(f"lora: unknown {name!r}")
             continue
-        if base.family != "sdxl":
+        if base.family not in LORA_FAMILIES:
             log.append(
                 f"lora: {base.family!r} family does not yet support LoRAs; "
                 f"skipping {name!r}"

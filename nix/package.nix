@@ -108,24 +108,55 @@ let
                           pyPkgs.accelerate pyPkgs.accelerate;
 
   # diffusers needs to be newer than nixpkgs for Z-Image / Pony / Illustrious
-  # support. v0.37.1 keeps safetensors compatible with nixpkgs 0.7.0.
+  # support, and for FLUX.2 [klein] (Flux2KleinPipeline) + the quanto fp8
+  # FLUX loaders. Pinned to the exact commit zimt was developed and verified
+  # against (0.39.0.dev0); keeps safetensors compatible with nixpkgs 0.7.0.
   diffusersFromGit = pyPkgs.buildPythonPackage rec {
     pname = "diffusers";
-    version = "0.37.1";
+    version = "0.39.0.dev0";
     format = "pyproject";
     src = fetchFromGitHub {
       owner = "huggingface";
       repo = "diffusers";
-      rev = "ad3a3afc3a4d3068bbb12f58129c855087ffc6d6";
-      hash = "sha256-PKVzByWR6VjtD6ZE+/Uc52Xv+As2OzIPJcQK9vj6sXo=";
+      rev = "79de3064ddf87ac7425731d201f84a88d0770607";
+      hash = "sha256-oV4h+Vb4ORBsfnWg1K4lwH75DF9JvQBEQI0cOWR0irg=";
     };
     nativeBuildInputs = [ pyPkgs.setuptools ];
     propagatedBuildInputs = with pyPkgs; [
       filelock huggingface-hub importlib-metadata numpy
       pillow regex requests safetensors
     ];
+    # 0.39 declares safetensors>=0.8.0-rc.0, but nixpkgs ships 0.7.0 and that
+    # works at runtime (verified in the dev venv). Skip the strict check.
+    dontCheckRuntimeDeps = true;
     doCheck = false;
     pythonImportsCheck = [ "diffusers" ];
+  };
+
+  # optimum-quanto: fp8 (qfloat8) quantization backend for the FLUX.1 and
+  # FLUX.2-klein transformers. Not in nixpkgs, so pin the universal wheel.
+  # torch is intentionally NOT a propagated dep — the xpu wheel set layers it
+  # into the env; declaring nixpkgs torch here would re-introduce the
+  # site-packages conflict that stripTorch exists to avoid.
+  optimumQuanto = pyPkgs.buildPythonPackage rec {
+    pname = "optimum-quanto";
+    version = "0.2.7";
+    format = "wheel";
+    src = fetchurl {
+      url = "https://files.pythonhosted.org/packages/8d/33/4ad914b0ae7e46296fe00d76d084be351fef69816b3498ed32a178471c8a/optimum_quanto-0.2.7-py3-none-any.whl";
+      hash = "sha256-E2mx2aShl/iMDRxn6NlQaU5bhs5Mnzh44XjVvjUzn2E=";
+    };
+    # ninja is omitted on purpose: it's only needed to JIT-compile CUDA
+    # kernels (never on XPU — qfloat8 dequantizes via torch ops), and pulling
+    # the python ninja package injects a build-phase hook that breaks the
+    # wheel install.
+    propagatedBuildInputs = with pyPkgs; [ numpy safetensors huggingface-hub ];
+    # torch>=2.6.0 from the wheel METADATA is satisfied at the env layer (xpu
+    # wheels), not here — skip the runtime-deps + import checks (importing
+    # optimum.quanto needs torch present).
+    dontCheckRuntimeDeps = true;
+    doCheck = false;
+    pythonImportsCheck = [ ];
   };
   resolvedDiffusers = pickDefault diffusersPackage
                         diffusersFromGit diffusersFromGit
@@ -163,6 +194,8 @@ let
       # with "PEFT backend is required for this method.".
       peft
     ]
+    # fp8 quantization backend for the FLUX loaders (see flux.py).
+    ++ [ optimumQuanto ]
     ++ optional (resolvedTorch != null) resolvedTorch
     ++ optional (resolvedTorchvision != null) resolvedTorchvision
     ++ optional (resolvedTransformers != null) resolvedTransformers

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+from zimt.models.loras import LORAS
 from zimt.models.registry import MODELS
+from zimt.models.spec import LORA_FAMILIES
 from zimt.webui.exec_api import _MAX_PIXELS_BY_FAMILY
 
 
@@ -30,6 +32,29 @@ class RegistryCase(unittest.TestCase):
             with self.subTest(model=name):
                 self.assertIn(spec.family, _MAX_PIXELS_BY_FAMILY,
                               f"{name}: family {spec.family!r} missing a pixel cap")
+
+
+class LoraRegistryCase(unittest.TestCase):
+    def test_every_lora_is_well_formed(self) -> None:
+        # A LoRA only loads on a base whose family supports LoRAs AND whose
+        # compatibility_tags overlap the adapter's compatible_with. Assert
+        # each adapter targets a LoRA-capable family and could match at least
+        # one registered base — else it's dead weight in the UI.
+        base_tags_by_family: dict[str, set[str]] = {}
+        for spec in MODELS.values():
+            base_tags_by_family.setdefault(spec.family, set()).update(
+                spec.compatibility_tags)
+        for name, lora in LORAS.items():
+            with self.subTest(lora=name):
+                self.assertEqual(lora.name, name)
+                self.assertTrue(lora.repo_id, f"{name}: empty repo_id")
+                self.assertIn(lora.family, LORA_FAMILIES,
+                              f"{name}: family {lora.family!r} can't apply LoRAs")
+                reachable = base_tags_by_family.get(lora.family, set())
+                self.assertTrue(
+                    any(t in reachable for t in lora.compatible_with),
+                    f"{name}: compatible_with {lora.compatible_with} matches no "
+                    f"{lora.family} base (tags {reachable})")
 
 
 if __name__ == "__main__":

@@ -1318,41 +1318,42 @@ class AuthEmptyOriginTests(unittest.TestCase):
 
 
 class NonSdxlLoraTests(unittest.TestCase):
-    def test_apply_lora_args_rejects_lora_for_non_sdxl_base(self) -> None:
+    def test_apply_lora_args_rejects_lora_for_lora_incapable_base(self) -> None:
         # PR-07-D14 (layer 1): apply_lora_args must log and skip LoRAs when
-        # the base model's family is not "sdxl", rather than adding them to
-        # the stack where they would be silently ignored at generation time.
+        # the base's family can't apply them (flux/flux2 load fp8-quantized),
+        # rather than adding them to the stack where they'd be silently
+        # ignored at generation time. (sdxl + zimage DO support LoRAs.)
         from zimt.models.spec import LoraSpec
         from zimt.models.loras import LORAS
 
-        zimage_lora = LoraSpec(
-            name="test-zimage-lora",
+        flux_lora = LoraSpec(
+            name="test-flux-lora",
             description="test",
             repo_id="test/repo",
-            family="zimage",
-            compatible_with=["zimage"],
+            family="flux",
+            compatible_with=["flux"],
         )
-        base = MODELS["z-image-turbo"]  # family="zimage"
+        base = MODELS["flux-1-dev"]  # family="flux" — LoRA-incapable
         stack: list[tuple[str, float]] = []
 
-        with patch.dict(LORAS, {"test-zimage-lora": zimage_lora}):
-            log = apply_lora_args(stack, ["test-zimage-lora"], base)
+        with patch.dict(LORAS, {"test-flux-lora": flux_lora}):
+            log = apply_lora_args(stack, ["test-flux-lora"], base)
 
         self.assertEqual(stack, [],
-                         "LoRA must not be added to stack for non-SDXL base")
+                         "LoRA must not be added to stack for a LoRA-incapable base")
         self.assertTrue(
             any("does not yet support" in line or "family" in line for line in log),
             f"expected family-unsupported message in log, got {log!r}",
         )
 
-    def test_pnginfo_omits_loras_text_for_non_sdxl_family_with_nonempty_stack(self) -> None:
+    def test_pnginfo_omits_loras_text_for_lora_incapable_family_with_nonempty_stack(self) -> None:
         # PR-10-D02: _pnginfo previously wrote "loras" unconditionally
-        # even when _apply_lora_stack skipped the stack on a non-SDXL
+        # even when _apply_lora_stack skipped the stack on a LoRA-incapable
         # family. The PNG metadata must not claim LoRAs were applied
         # when they weren't.
         from zimt.generate import _pnginfo
 
-        g = _config_for("z-image-turbo")  # family="zimage"
+        g = _config_for("flux-1-dev")  # family="flux" — LoRA-incapable
         g.lora_stack = [("pixel-art-xl", 0.8)]
         info = _pnginfo(g, "prompt", "prompt", "prompt", 42)
         # PngInfo exposes the text chunks via .chunks (a list of tuples).
@@ -1416,14 +1417,14 @@ class NonSdxlLoraTests(unittest.TestCase):
                 keywords.add(data.split(b"\x00", 1)[0].decode("latin-1", "replace"))
         self.assertNotIn("command_line", keywords)
 
-    def test_apply_lora_stack_warns_when_non_sdxl_has_loras(self) -> None:
+    def test_apply_lora_stack_warns_when_lora_incapable_has_loras(self) -> None:
         # PR-07-D14 (layer 2): _apply_lora_stack must emit a warning (not
-        # silently ignore) when g.lora_stack is non-empty for a non-SDXL family.
-        import logging as _logging
+        # silently ignore) when g.lora_stack is non-empty for a LoRA-incapable
+        # family (flux/flux2).
         from zimt.generate import _apply_lora_stack
 
         pipe = MagicMock()
-        g = _config_for("z-image-turbo")  # family="zimage"
+        g = _config_for("flux-1-dev")  # family="flux" — LoRA-incapable
         g.lora_stack = [("pixel-art-xl", 1.0)]
 
         with self.assertLogs("zimt.generate", level="WARNING") as cm:
@@ -1431,7 +1432,7 @@ class NonSdxlLoraTests(unittest.TestCase):
 
         # The warning must mention the family and the LoRA name.
         combined = "\n".join(cm.output)
-        self.assertIn("zimage", combined)
+        self.assertIn("flux", combined)
         self.assertIn("pixel-art-xl", combined)
         # Pipeline must not have been touched (no load_lora_weights call).
         pipe.load_lora_weights.assert_not_called()

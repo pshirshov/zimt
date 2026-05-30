@@ -41,6 +41,21 @@ ZIMAGE_BUCKETS: list[Resolution] = [
     ( 768, 1344, "16:9 hi-res portrait (1.03 MP)"),
 ]
 
+# Flux (1 & 2) are flow-matching transformers trained around 1 MP with a
+# 16-px patch grid; they handle a wide aspect range. These anchor on 1024²
+# and common ~1 MP aspects with 16-aligned dimensions.
+FLUX_BUCKETS: list[Resolution] = [
+    (1024, 1024, "1:1 square (1.05 MP)"),
+    (1344,  768, "16:9 landscape (1.03 MP)"),
+    ( 768, 1344, "9:16 portrait (1.03 MP)"),
+    (1216,  832, "3:2 landscape (1.01 MP)"),
+    ( 832, 1216, "2:3 portrait (1.01 MP)"),
+    (1152,  896, "9:7 landscape (1.03 MP)"),
+    ( 896, 1152, "7:9 portrait (1.03 MP)"),
+    (1408,  768, "16:9 wide (1.03 MP)"),
+    (1536, 1536, "1:1 large (2.36 MP)"),
+]
+
 
 # Orientation keywords accepted by `/res`. Each picks the largest preset
 # (by total pixel area) whose aspect matches the requested orientation.

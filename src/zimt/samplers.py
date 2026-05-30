@@ -36,6 +36,12 @@ ZIMAGE_SAMPLERS: dict[str, SamplerEntry] = {
     "flow-match-euler": ("FlowMatchEulerDiscreteScheduler", {}),
 }
 
+# Flux (1 & 2) ship a FlowMatchEulerDiscreteScheduler; only flow-matching
+# schedulers are valid for these transformers.
+FLUX_SAMPLERS: dict[str, SamplerEntry] = {
+    "flow-match-euler": ("FlowMatchEulerDiscreteScheduler", {}),
+}
+
 
 def apply_sampler(
     pipe: Any,

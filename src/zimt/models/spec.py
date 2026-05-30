@@ -17,7 +17,7 @@ from ..buckets import Resolution, SDXL_BUCKETS
 from ..memory import MemStrategy
 from ..samplers import SDXL_SAMPLERS, SamplerEntry
 
-Family = Literal["sdxl", "zimage"]
+Family = Literal["sdxl", "zimage", "flux", "flux2"]
 
 
 @dataclass

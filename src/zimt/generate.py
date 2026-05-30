@@ -320,10 +320,16 @@ def generate(
 
         extra["callback_on_step_end"] = _on_step_end
 
+    # Flux.2's pipeline has no `negative_prompt` parameter (it is purely
+    # guidance-distilled), so passing the kwarg at all would raise
+    # TypeError. Flux.1 keeps it (a no-op unless true_cfg_scale > 1). Build
+    # the call kwargs so the parameter is omitted only for that family.
+    if g.spec.family != "flux2":
+        extra["negative_prompt"] = neg_arg
+
     t0 = time.time()
     image = pipe(
         prompt=prompt_arg,
-        negative_prompt=neg_arg,
         height=g.height,
         width=g.width,
         num_inference_steps=g.steps,

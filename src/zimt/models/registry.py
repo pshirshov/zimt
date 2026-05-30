@@ -9,9 +9,9 @@ Keys are the strings users type after ``/model``. Add a model by:
 
 from __future__ import annotations
 
-from ..buckets import SDXL_BUCKETS, ZIMAGE_BUCKETS
-from ..samplers import SDXL_SAMPLERS, ZIMAGE_SAMPLERS
-from . import community, illustrious, noobai, pony, zimage
+from ..buckets import FLUX_BUCKETS, SDXL_BUCKETS, ZIMAGE_BUCKETS
+from ..samplers import FLUX_SAMPLERS, SDXL_SAMPLERS, ZIMAGE_SAMPLERS
+from . import community, flux, illustrious, noobai, pony, zimage
 from .sdxl_common import tokenize_report_sdxl
 from .spec import ModelSpec
 
@@ -45,6 +45,45 @@ MODELS: dict[str, ModelSpec] = {
         score_tags="",
         load=zimage.load,
         tokenize_report=zimage.tokenize_report,
+    ),
+    "flux-1-dev": ModelSpec(
+        name="flux-1-dev",
+        description=(
+            "FLUX.1-dev (12B flow-matching DiT, CLIP+T5; fp8 transformer via "
+            "quanto — ~22 GiB peak; guidance-distilled, no negative prompt)"
+        ),
+        repo_id="black-forest-labs/FLUX.1-dev",
+        compatibility_tags=["flux"],
+        family="flux",
+        default_steps=28,
+        default_cfg=3.5,
+        default_negative="",
+        resolutions=list(FLUX_BUCKETS),
+        samplers=dict(FLUX_SAMPLERS),
+        default_sampler="flow-match-euler",
+        score_tags="",
+        load=flux.load,
+        tokenize_report=flux.tokenize_report,
+    ),
+    "flux-2-klein-9b": ModelSpec(
+        name="flux-2-klein-9b",
+        description=(
+            "FLUX.2 [klein] 9B (BFL's distilled FLUX.2, Qwen3 encoder; fp8 "
+            "transformer via quanto — ~24 GiB peak; guidance-distilled)"
+        ),
+        repo_id="black-forest-labs/FLUX.2-klein-9B",
+        compatibility_tags=["flux2"],
+        family="flux2",
+        # klein is heavily distilled — model card uses 4 steps, guidance 1.0.
+        default_steps=4,
+        default_cfg=1.0,
+        default_negative="",
+        resolutions=list(FLUX_BUCKETS),
+        samplers=dict(FLUX_SAMPLERS),
+        default_sampler="flow-match-euler",
+        score_tags="",
+        load=flux.load_flux2,
+        tokenize_report=flux.tokenize_report_flux2,
     ),
     "pony-v6-xl": ModelSpec(
         name="pony-v6-xl",

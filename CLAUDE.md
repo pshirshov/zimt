@@ -218,6 +218,14 @@ Steady-state cost (SDXL @ 768x768, 8 steps, Intel Arc B70):
 | `cpuoffload`     | 5.1s      | 5179 MiB  |
 | `cpuoffload-seq` | 10.6s     | 1085 MiB  |
 
+FLUX.1-dev fp8 cost (1024x1024, 28 steps, Arc Pro B70, `mem off`):
+
+| backend                     | warm infer | peak VRAM |
+|-----------------------------|-----------|-----------|
+| quanto qfloat8 (chosen)     | 40.3s     | 22.32 GiB |
+| torchao float8 weight-only  | 45.8s     | 33.53 GiB (spills past 32 GB) |
+| torchao float8 dynamic-act  | 53.2s     | 22.32 GiB |
+
 The `max` mode currently fails at inference on XPU — accelerate's
 `device_map="balanced"` doesn't install device-alignment hooks for the
 conv path. Ships anyway as forward-compatible UX; the failure is a
@@ -231,6 +239,29 @@ For new architectures, write a sibling module with
 `load(device, mem) -> pipeline` (and ideally `tokenize_report`), then
 add a `ModelSpec` entry. Every loader **must** accept `mem` — see
 `zimage.py` for the non-SDXL example.
+
+### Families
+
+`ModelSpec.family` (`spec.py`) gates behaviour across the pipeline:
+`sdxl` (compel weighting + clip_skip), `zimage`, `flux`, `flux2`. A new
+family must be added to **three** places or it breaks at runtime:
+`Family` in `spec.py`, `_MAX_PIXELS_BY_FAMILY` in `webui/exec_api.py`
+(else `KeyError` in `_validate_size`), and — if its pipeline's
+`__call__` signature differs — the per-family branch in
+`generate.py`. Example: `flux2`'s pipeline has **no** `negative_prompt`
+parameter, so `generate()` omits the kwarg for that family.
+
+### Flux (`src/zimt/models/flux.py`)
+
+FLUX.1-dev / FLUX.2-dev are guidance-distilled flow-matching DiTs (no
+classifier-free CFG; `guidance_scale` is the distilled embedding).
+Both repos are **gated** — first download needs `HF_TOKEN`; cached loads
+work offline. FLUX.1's transformer loads as **fp8 via optimum-quanto**
+(qfloat8) — chosen over torchao after an on-XPU benchmark (see the table
+in `flux.py`); T5 stays bf16. For FLUX.2 we ship **[klein] 9B**
+(`Flux2KleinPipeline`, Qwen3 encoder) rather than the 32B dev — same fp8
+quanto transformer recipe (~24 GiB peak), Qwen3 stays bf16. Samplers/
+buckets are flow-match only (`FLUX_SAMPLERS`, `FLUX_BUCKETS`).
 
 ## Outputs gallery modal
 

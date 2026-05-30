@@ -25,6 +25,15 @@ dependencies = [
   "peft",
   # Prompt weighting for SDXL — optional at runtime; the import is wrapped.
   "compel",
+  # fp8 quantization for the FLUX.1 transformer (chosen over torchao after
+  # benchmarking on XPU — see src/zimt/models/flux.py).
+  "optimum-quanto",
+  # GGUF single-file loading for the FLUX.2 transformer.
+  "gguf",
+  # Benchmarked fp8 alternative to quanto; not chosen, but diffusers imports
+  # it lazily for TorchAoConfig and the loader can switch back without a
+  # reinstall.
+  "torchao",
 ]
 
 [project.scripts]

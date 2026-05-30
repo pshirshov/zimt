@@ -53,6 +53,8 @@ _MAX_CFG = 30.0
 _MAX_PIXELS_BY_FAMILY = {
     "sdxl": 1536 * 1536,
     "zimage": 2048 * 2048,
+    "flux": 2048 * 2048,
+    "flux2": 2048 * 2048,
 }
 
 

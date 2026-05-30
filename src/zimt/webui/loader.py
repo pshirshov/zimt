@@ -37,38 +37,69 @@ def _has_active_generation_jobs() -> bool:
     )
 
 
-def _do_load_sync(name: str) -> None:
-    """Executor-thread payload — unload current (if any), load new, reset cfg.
+def _do_load_sync(name: str, loras: tuple[tuple[str, float], ...] | None = None) -> None:
+    """Executor-thread payload — unload current (if any), load new, set cfg.
 
     The active memory strategy lives on STATE.mem; if the user changed it
     via ``/mem``, the next load picks it up here.
+
+    ``loras`` distinguishes two cases:
+      * ``None`` — a fresh model selection: settings reset to the spec
+        defaults and the LoRA stack starts empty.
+      * a tuple — a same-model **reload** (triggered by a ``/lora`` change on
+        an fp8 fuse-family, or a ``/mem`` change): the current GenConfig
+        settings are preserved and the (already-fused, for fuse families)
+        stack is set to ``loras``.
     """
+    prev = STATE.g
     if STATE.pipe is not None:
         unload(STATE.pipe)
         STATE.pipe = None
     STATE.g = None
     spec = MODELS[name]
-    pipe = load_spec(spec, STATE.mem)
+    pipe = load_spec(spec, STATE.mem, tuple(loras or ()))
     STATE.pipe = pipe
-    STATE.g = GenConfig(
-        spec=spec,
-        cfg=spec.default_cfg,
-        negative_prompt=spec.default_negative,
-        height=spec.default_h,
-        width=spec.default_w,
-        steps=spec.default_steps,
-    )
+    if loras is None or prev is None or prev.spec.name != name:
+        STATE.g = GenConfig(
+            spec=spec,
+            cfg=spec.default_cfg,
+            negative_prompt=spec.default_negative,
+            height=spec.default_h,
+            width=spec.default_w,
+            steps=spec.default_steps,
+            lora_stack=list(loras or []),
+        )
+    else:
+        # Same-model reload: keep the user's tuned settings, swap the stack.
+        STATE.g = GenConfig(
+            spec=spec,
+            cfg=prev.cfg,
+            negative_prompt=prev.negative_prompt,
+            height=prev.height,
+            width=prev.width,
+            steps=prev.steps,
+            sampler=prev.sampler,
+            clip_skip=prev.clip_skip,
+            lora_stack=list(loras),
+        )
 
 
-async def load_model(name: str, *, force: bool = False) -> None:
+async def load_model(name: str, *, force: bool = False,
+                     loras: tuple[tuple[str, float], ...] | None = None) -> None:
     """No-ops when the requested model is already loaded.
 
     ``force=True`` skips the "already loaded" short-circuits so the model
     is unloaded and re-loaded — used when STATE.mem changes and the
     currently-resident pipeline needs to pick up the new strategy.
 
+    ``loras`` (non-None) marks a same-model reload that preserves the current
+    GenConfig settings and fuses/sets the given LoRA stack — see
+    :func:`_do_load_sync`. Passing it implies ``force``.
+
     Raises :class:`ModelLoadError` on unknown name or load failure.
     """
+    if loras is not None:
+        force = True
     if name not in MODELS:
         raise ModelLoadError(f"unknown model {name!r}")
     if (not force
@@ -134,7 +165,7 @@ async def load_model(name: str, *, force: bool = False) -> None:
                 with download_context(job.id):
                     ctx = contextvars.copy_context()
                     await loop.run_in_executor(
-                        EXECUTOR, lambda: ctx.run(_do_load_sync, name)
+                        EXECUTOR, lambda: ctx.run(_do_load_sync, name, loras)
                     )
             except DownloadCanceled:
                 # User-initiated cancel — not a failure. Don't raise

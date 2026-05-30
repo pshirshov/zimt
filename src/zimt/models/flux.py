@@ -42,50 +42,83 @@ FLUX1_REPO = "black-forest-labs/FLUX.1-dev"
 FLUX2_KLEIN_REPO = "black-forest-labs/FLUX.2-klein-9B"
 
 
-def load(device: str, mem: MemStrategy) -> Any:
-    """FLUX.1-dev with an fp8 (quanto qfloat8) transformer; T5 stays bf16."""
-    from diffusers import FluxPipeline, FluxTransformer2DModel, QuantoConfig
+def _fuse_loras(pipe: Any, loras: tuple[tuple[str, float], ...]) -> None:
+    """Bake each registry LoRA into ``pipe.transformer`` (bf16) at its weight.
 
-    # QuantoConfig is the diffusers wrapper around optimum-quanto. (diffusers
-    # marks it deprecated for a future major; the pinned version still ships
-    # it, and it loads + quantizes the shards in one pass without ever
-    # materialising the full bf16 transformer on the device.)
-    transformer = FluxTransformer2DModel.from_pretrained(
-        FLUX1_REPO,
-        subfolder="transformer",
-        quantization_config=QuantoConfig(weights_dtype="float8"),
-        torch_dtype=torch.bfloat16,
+    Fused sequentially — load → fuse at the LoRA's weight → unload — so the
+    per-LoRA weight is honoured and nothing remains as a live PEFT adapter
+    (which would not survive the subsequent quanto quantization).
+    """
+    from .loras import LORAS
+    for name, weight in loras:
+        spec = LORAS.get(name)
+        if spec is None:
+            raise ValueError(f"unknown lora {name!r}")
+        kwargs: dict[str, Any] = {}
+        if spec.weight_name:
+            kwargs["weight_name"] = spec.weight_name
+        pipe.load_lora_weights(spec.repo_id, **kwargs)
+        pipe.fuse_lora(lora_scale=weight)
+        pipe.unload_lora_weights()
+
+
+def _load_flux_fp8(pipe_cls: Any, transformer_cls: Any, repo: str,
+                   device: str, mem: MemStrategy,
+                   loras: tuple[tuple[str, float], ...]) -> Any:
+    """Build a FLUX pipeline with an fp8 transformer.
+
+    Without LoRAs we quantize during ``from_pretrained`` (QuantoConfig) — the
+    fast path that never materialises the full bf16 transformer. With LoRAs we
+    must load bf16, fuse the adapters (PEFT can't inject into quantized
+    layers), then quantize the fused weights via optimum-quanto.
+    """
+    if not loras:
+        from diffusers import QuantoConfig
+        transformer = transformer_cls.from_pretrained(
+            repo, subfolder="transformer",
+            quantization_config=QuantoConfig(weights_dtype="float8"),
+            torch_dtype=torch.bfloat16,
+        )
+        pipe = pipe_cls.from_pretrained(
+            repo, transformer=transformer, torch_dtype=torch.bfloat16,
+            **from_pretrained_kwargs(mem),
+        )
+        finalize_pipe(pipe, device, mem)
+        return pipe
+
+    # Fuse-at-load path: bf16 transformer → fuse LoRAs → quantize to fp8.
+    from optimum.quanto import freeze, qfloat8, quantize
+    transformer = transformer_cls.from_pretrained(
+        repo, subfolder="transformer", torch_dtype=torch.bfloat16,
     )
-    pipe = FluxPipeline.from_pretrained(
-        FLUX1_REPO,
-        transformer=transformer,
-        torch_dtype=torch.bfloat16,
-        **from_pretrained_kwargs(mem),
+    pipe = pipe_cls.from_pretrained(
+        repo, transformer=transformer, torch_dtype=torch.bfloat16,
     )
+    _fuse_loras(pipe, loras)
+    quantize(pipe.transformer, weights=qfloat8)
+    freeze(pipe.transformer)
     finalize_pipe(pipe, device, mem)
     return pipe
 
 
-def load_flux2(device: str, mem: MemStrategy) -> Any:
-    """FLUX.2 [klein] 9B with an fp8 (quanto) transformer; Qwen3 stays bf16."""
-    from diffusers import (
-        Flux2KleinPipeline, Flux2Transformer2DModel, QuantoConfig,
-    )
+def load(device: str, mem: MemStrategy,
+         loras: tuple[tuple[str, float], ...] = ()) -> Any:
+    """FLUX.1-dev — fp8 (quanto qfloat8) transformer, T5 bf16.
 
-    transformer = Flux2Transformer2DModel.from_pretrained(
-        FLUX2_KLEIN_REPO,
-        subfolder="transformer",
-        quantization_config=QuantoConfig(weights_dtype="float8"),
-        torch_dtype=torch.bfloat16,
-    )
-    pipe = Flux2KleinPipeline.from_pretrained(
-        FLUX2_KLEIN_REPO,
-        transformer=transformer,
-        torch_dtype=torch.bfloat16,
-        **from_pretrained_kwargs(mem),
-    )
-    finalize_pipe(pipe, device, mem)
-    return pipe
+    ``loras`` (if any) are fused into the transformer at load time — see
+    :func:`_load_flux_fp8`.
+    """
+    from diffusers import FluxPipeline, FluxTransformer2DModel
+    return _load_flux_fp8(FluxPipeline, FluxTransformer2DModel,
+                          FLUX1_REPO, device, mem, loras)
+
+
+def load_flux2(device: str, mem: MemStrategy,
+               loras: tuple[tuple[str, float], ...] = ()) -> Any:
+    """FLUX.2 [klein] 9B — fp8 (quanto) transformer, Qwen3 bf16."""
+    from diffusers import Flux2KleinPipeline, Flux2Transformer2DModel
+    return _load_flux_fp8(Flux2KleinPipeline, Flux2Transformer2DModel,
+                          FLUX2_KLEIN_REPO, device, mem, loras)
 
 
 def tokenize_report(pipe: Any, text: str) -> None:

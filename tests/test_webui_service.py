@@ -76,7 +76,7 @@ class LoaderTests(StateCase):
         STATE.pipe = object()
         STATE.g = _config_for("z-image-turbo")
 
-        def fail_after_unload(_name: str) -> None:
+        def fail_after_unload(_name: str, loras=None) -> None:
             STATE.pipe = None
             raise RuntimeError("simulated load failure")
 
@@ -89,7 +89,7 @@ class LoaderTests(StateCase):
 
         calls: list[str] = []
 
-        def succeed(name: str) -> None:
+        def succeed(name: str, loras=None) -> None:
             calls.append(name)
             STATE.pipe = object()
             STATE.g = _config_for(name)
@@ -152,7 +152,7 @@ class ExecValidationTests(StateCase):
         # surfaces as "loading X…"), producing two near-identical lines.
         load_calls: list[str] = []
 
-        def succeed(name: str) -> None:
+        def succeed(name: str, loras=None) -> None:
             load_calls.append(name)
             STATE.pipe = object()
             STATE.g = _config_for(name)
@@ -194,7 +194,7 @@ class ExecValidationTests(StateCase):
         CANCEL_EVENTS["queued"] = threading.Event()
         load_calls: list[str] = []
 
-        def succeed(name: str) -> None:
+        def succeed(name: str, loras=None) -> None:
             load_calls.append(name)
             STATE.pipe = object()
             STATE.g = _config_for(name)
@@ -228,7 +228,7 @@ class DownloadIdentityTests(StateCase):
     async def test_model_load_download_job_exposes_base_target_kind(self) -> None:
         load_calls: list[str] = []
 
-        def succeed(name: str) -> None:
+        def succeed(name: str, loras=None) -> None:
             load_calls.append(name)
             STATE.pipe = object()
             STATE.g = _config_for(name)
@@ -267,7 +267,7 @@ class DownloadOwnershipTests(StateCase):
             if not release_prefetch.wait(timeout=5):
                 raise RuntimeError("timed out waiting to release blocked prefetch")
 
-        def succeed(name: str) -> None:
+        def succeed(name: str, loras=None) -> None:
             current = downloads.current_download()
             observed["during_load_owner"] = current["id"] if current is not None else None
             STATE.pipe = object()
@@ -324,7 +324,7 @@ class DownloadOwnershipTests(StateCase):
 
         observed: dict[str, bool | None] = {}
 
-        def succeed(name: str) -> None:
+        def succeed(name: str, loras=None) -> None:
             # Captured at the moment the executor payload runs — the
             # load Job has already been marked progress_owner=False
             # because set_active_download returned False above.
@@ -1019,7 +1019,7 @@ class ConcurrentLoadGateTests(StateCase):
         # the gate but has not yet reset STATE.loading_model.
         STATE.loading_model = "ascii-art"
 
-        def succeed(name: str) -> None:
+        def succeed(name: str, loras=None) -> None:
             STATE.pipe = object()
             STATE.g = _config_for(name)
 
@@ -1318,55 +1318,59 @@ class AuthEmptyOriginTests(unittest.TestCase):
 
 
 class NonSdxlLoraTests(unittest.TestCase):
-    def test_apply_lora_args_rejects_lora_for_lora_incapable_base(self) -> None:
-        # PR-07-D14 (layer 1): apply_lora_args must log and skip LoRAs when
-        # the base's family can't apply them (flux/flux2 load fp8-quantized),
-        # rather than adding them to the stack where they'd be silently
-        # ignored at generation time. (sdxl + zimage DO support LoRAs.)
+    def test_apply_lora_args_accepts_flux_lora_on_flux_base(self) -> None:
+        # FLUX is a FUSE family: LoRAs are accepted and added to the stack
+        # (fused into the fp8 transformer at load time by the /lora reload).
         from zimt.models.spec import LoraSpec
         from zimt.models.loras import LORAS
 
         flux_lora = LoraSpec(
-            name="test-flux-lora",
-            description="test",
-            repo_id="test/repo",
-            family="flux",
-            compatible_with=["flux"],
+            name="test-flux-lora", description="test", repo_id="test/repo",
+            family="flux", compatible_with=["flux"],
         )
-        base = MODELS["flux-1-dev"]  # family="flux" — LoRA-incapable
+        base = MODELS["flux-1-dev"]  # family="flux" — FUSE
         stack: list[tuple[str, float]] = []
 
+        with patch.dict(LORAS, {"test-flux-lora": flux_lora}), \
+                patch("zimt.webui.models_info.is_installed", return_value=True):
+            apply_lora_args(stack, ["test-flux-lora:0.8"], base)
+
+        self.assertEqual(stack, [("test-flux-lora", 0.8)],
+                         "FLUX LoRA must be accepted onto the stack")
+
+    def test_apply_lora_args_rejects_incompatible_lora(self) -> None:
+        # The compatibility-tag check still blocks cross-architecture LoRAs:
+        # a flux-tagged adapter on an SDXL base is skipped, not stacked.
+        from zimt.models.spec import LoraSpec
+        from zimt.models.loras import LORAS
+
+        flux_lora = LoraSpec(
+            name="test-flux-lora", description="test", repo_id="test/repo",
+            family="flux", compatible_with=["flux"],
+        )
+        base = MODELS["pony-v6-xl"]  # family="sdxl"
+        stack: list[tuple[str, float]] = []
         with patch.dict(LORAS, {"test-flux-lora": flux_lora}):
             log = apply_lora_args(stack, ["test-flux-lora"], base)
+        self.assertEqual(stack, [])
+        self.assertTrue(any("not compatible" in line for line in log), log)
 
-        self.assertEqual(stack, [],
-                         "LoRA must not be added to stack for a LoRA-incapable base")
-        self.assertTrue(
-            any("does not yet support" in line or "family" in line for line in log),
-            f"expected family-unsupported message in log, got {log!r}",
-        )
-
-    def test_pnginfo_omits_loras_text_for_lora_incapable_family_with_nonempty_stack(self) -> None:
-        # PR-10-D02: _pnginfo previously wrote "loras" unconditionally
-        # even when _apply_lora_stack skipped the stack on a LoRA-incapable
-        # family. The PNG metadata must not claim LoRAs were applied
-        # when they weren't.
+    def test_pnginfo_records_loras_text_for_fuse_family(self) -> None:
+        # FUSE families bake the stack into the transformer at load, so the
+        # LoRAs ARE applied and the PNG must record them.
         from zimt.generate import _pnginfo
 
-        g = _config_for("flux-1-dev")  # family="flux" — LoRA-incapable
-        g.lora_stack = [("pixel-art-xl", 0.8)]
+        g = _config_for("flux-1-dev")  # family="flux" — FUSE
+        g.lora_stack = [("flux-uncensored", 0.8)]
         info = _pnginfo(g, "prompt", "prompt", "prompt", 42)
-        # PngInfo exposes the text chunks via .chunks (a list of tuples).
-        # Extract the keyword of every tEXt/iTXt/zTXt chunk.
         keywords: set[str] = set()
         for chunk_type, data, *_ in info.chunks:
             if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
-                # tEXt: keyword\x00text; iTXt: keyword\x00...
                 keyword = data.split(b"\x00", 1)[0].decode("latin-1", "replace")
                 keywords.add(keyword)
-        self.assertNotIn(
+        self.assertIn(
             "loras", keywords,
-            "non-SDXL family must not record 'loras' in PNG metadata",
+            "FUSE family must record fused 'loras' in PNG metadata",
         )
 
     def test_pnginfo_records_loras_text_for_sdxl_family_with_nonempty_stack(self) -> None:
@@ -1417,25 +1421,22 @@ class NonSdxlLoraTests(unittest.TestCase):
                 keywords.add(data.split(b"\x00", 1)[0].decode("latin-1", "replace"))
         self.assertNotIn("command_line", keywords)
 
-    def test_apply_lora_stack_warns_when_lora_incapable_has_loras(self) -> None:
-        # PR-07-D14 (layer 2): _apply_lora_stack must emit a warning (not
-        # silently ignore) when g.lora_stack is non-empty for a LoRA-incapable
-        # family (flux/flux2).
+    def test_apply_lora_stack_is_noop_for_fuse_family(self) -> None:
+        # For FUSE families the LoRAs are already fused into the loaded
+        # transformer, so the per-generate _apply_lora_stack must NOT touch
+        # the pipe (no live load_lora_weights/set_adapters) and must NOT warn.
+        import logging
         from zimt.generate import _apply_lora_stack
 
         pipe = MagicMock()
-        g = _config_for("flux-1-dev")  # family="flux" — LoRA-incapable
-        g.lora_stack = [("pixel-art-xl", 1.0)]
+        g = _config_for("flux-1-dev")  # family="flux" — FUSE
+        g.lora_stack = [("flux-uncensored", 0.8)]
 
-        with self.assertLogs("zimt.generate", level="WARNING") as cm:
+        logger = logging.getLogger("zimt.generate")
+        with self.assertNoLogs(logger, level="WARNING"):
             _apply_lora_stack(pipe, g)
-
-        # The warning must mention the family and the LoRA name.
-        combined = "\n".join(cm.output)
-        self.assertIn("flux", combined)
-        self.assertIn("pixel-art-xl", combined)
-        # Pipeline must not have been touched (no load_lora_weights call).
         pipe.load_lora_weights.assert_not_called()
+        pipe.set_adapters.assert_not_called()
 
 
 class ModelUnloadTests(StateCase):

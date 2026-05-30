@@ -19,12 +19,19 @@ from ..samplers import SDXL_SAMPLERS, SamplerEntry
 
 Family = Literal["sdxl", "zimage", "flux", "flux2"]
 
-# Families whose pipelines accept PEFT LoRA stacking (load_lora_weights +
-# set_adapters) as loaded by zimt. `sdxl` and `zimage` load unquantized, so
-# adapters inject cleanly. `flux`/`flux2` load fp8-quantized (quanto) — PEFT
-# can't inject into quantized Linear layers — so they're excluded until a
-# fuse-into-bf16-then-quantize path exists.
-LORA_FAMILIES: frozenset[str] = frozenset({"sdxl", "zimage"})
+# LoRA application differs by family because of how the transformer loads:
+#
+#  * LIVE  (`sdxl`, `zimage`) — unquantized, so adapters inject cleanly via
+#    load_lora_weights + set_adapters and can be stacked/reweighted live,
+#    per-generate (see generate._apply_lora_stack).
+#  * FUSE  (`flux`, `flux2`)  — loaded fp8-quantized; PEFT can't inject into
+#    quantized Linear layers. Instead the loader bakes the LoRA(s) into the
+#    bf16 transformer (fuse_lora) BEFORE quantizing, so the stack is fixed at
+#    model-load time. Changing it requires a reload (see the /lora handlers).
+LIVE_LORA_FAMILIES: frozenset[str] = frozenset({"sdxl", "zimage"})
+FUSE_LORA_FAMILIES: frozenset[str] = frozenset({"flux", "flux2"})
+# Any family that can apply LoRAs at all (either mechanism).
+LORA_FAMILIES: frozenset[str] = LIVE_LORA_FAMILIES | FUSE_LORA_FAMILIES
 
 
 @dataclass
@@ -81,10 +88,15 @@ class ModelSpec:
     score_tags: str = ""
     """Auto-prepended to the user's prompt unless ``/raw`` is used."""
 
-    load: Callable[[str, MemStrategy], Any] = field(
-        default=lambda _d, _m: None
+    load: Callable[..., Any] = field(
+        default=lambda _d, _m, _loras=(): None
     )
-    """``load(device, mem) -> diffusers pipeline``."""
+    """``load(device, mem, loras=()) -> diffusers pipeline``.
+
+    ``loras`` is the fuse-at-load stack — a tuple of ``(name, weight)`` — used
+    only by FUSE-family loaders (flux/flux2), which bake the adapters into the
+    bf16 transformer before quantizing. LIVE-family loaders ignore it (they
+    apply LoRAs live, post-load)."""
 
     tokenize_report: Callable[[Any, str], None] = field(default=lambda _p, _t: None)
     """``tokenize_report(pipe, text)`` — prints to stdout."""

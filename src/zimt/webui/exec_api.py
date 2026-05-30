@@ -29,6 +29,7 @@ from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
 from ..memory import MemArgError, parse_mem_args
 from ..models.registry import MODELS
 from ..paths import DEFAULT_PROFILE, profile_fav_dir, profile_out_dir, valid_profile_name
+from ..models.spec import FUSE_LORA_FAMILIES
 from ..repl.commands import parse_commands
 from .jobs import run_job
 from .loader import ModelLoadError, load_model
@@ -269,8 +270,13 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
                 log.append(msg)
                 await emit_log(msg)
                 continue
+            # FUSE families (flux/flux2) bake LoRAs into the fp8 transformer
+            # at load, so a change reloads the model; LIVE families apply in
+            # place. Work on a copy so a no-op change doesn't trigger a reload.
+            spec = STATE.g.spec
+            new_stack = list(STATE.g.lora_stack)
             try:
-                messages = apply_lora_args(STATE.g.lora_stack, [args[0]], STATE.g.spec)
+                messages = apply_lora_args(new_stack, [args[0]], spec)
             except LoraCmdError as e:
                 log.append(f"/lora: {e}")
                 await emit_log(f"/lora: {e}", level="error")
@@ -278,7 +284,20 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
             for ln in messages:
                 log.append(ln)
                 await emit_log(ln)
-            await emit_state()
+            if spec.family in FUSE_LORA_FAMILIES:
+                if tuple(new_stack) != tuple(STATE.g.lora_stack):
+                    msg = (f"reloading {spec.name} to fuse LoRA changes "
+                           f"(fp8 bakes adapters at load)")
+                    log.append(msg)
+                    await emit_log(msg)
+                    try:
+                        await load_model(spec.name, loras=tuple(new_stack))
+                    except ModelLoadError as e:
+                        log.append(f"/lora reload: {e}")
+                        await emit_log(f"/lora reload: {e}", level="error")
+            else:
+                STATE.g.lora_stack = new_stack
+                await emit_state()
         elif cmd == "/mem":
             tokens = (args[0].split() if args else [])
             if not tokens:
@@ -313,7 +332,9 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
                     f"reloading {current} with mem={STATE.mem.describe()}"
                 )
                 try:
-                    await load_model(current, force=True)
+                    # Preserve the active stack (re-fuses for fp8 families) and
+                    # the user's tuned settings across the mem reload.
+                    await load_model(current, loras=tuple(STATE.g.lora_stack))
                 except ModelLoadError as e:
                     msg = f"/mem reload: {e}"
                     log.append(msg)

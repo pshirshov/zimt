@@ -251,6 +251,23 @@ family must be added to **three** places or it breaks at runtime:
 `generate.py`. Example: `flux2`'s pipeline has **no** `negative_prompt`
 parameter, so `generate()` omits the kwarg for that family.
 
+### LoRA families (LIVE vs FUSE)
+
+`spec.py` splits families by how LoRAs apply:
+- **LIVE** (`sdxl`, `zimage`) — unquantized; `_apply_lora_stack` in
+  `generate.py` loads + `set_adapters` live, per-generate. Stackable,
+  reweightable instantly.
+- **FUSE** (`flux`, `flux2`) — fp8-quantized; PEFT can't inject into
+  quanto layers, so `flux.load(device, mem, loras)` loads bf16, `fuse_lora`s
+  the stack, then quantizes. The stack is fixed at load, so the `/lora`
+  handlers (`webui/exec_api.py` + `repl/main.py`) **reload** the model
+  (`load_model(name, loras=…)`) for FUSE families instead of applying live.
+  `_apply_lora_stack` is a silent no-op for them (already fused).
+
+`load(device, mem, loras=())` is the loader contract; LIVE loaders accept
+and ignore `loras`. Same-model reloads (`/lora` change, `/mem` change)
+preserve the user's tuned GenConfig settings — see `_do_load_sync`.
+
 ### Flux (`src/zimt/models/flux.py`)
 
 FLUX.1-dev / FLUX.2-dev are guidance-distilled flow-matching DiTs (no

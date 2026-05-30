@@ -15,7 +15,9 @@ from ..memory import MemStrategy, finalize_pipe, from_pretrained_kwargs
 from ..tokenize_report import tokenize_one
 
 
-def load(device: str, mem: MemStrategy) -> Any:
+def load(device: str, mem: MemStrategy, loras: tuple = ()) -> Any:
+    # `loras` is accepted for loader-contract uniformity but ignored —
+    # Z-Image applies LoRAs live (see generate._apply_lora_stack), not at load.
     from diffusers import ZImagePipeline  # type: ignore[attr-defined]
 
     pipe = ZImagePipeline.from_pretrained(

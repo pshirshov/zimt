@@ -27,7 +27,7 @@ from .device import DEVICE
 from .dynamics import DynamicsSyntaxError, expand, has_dynamics
 from .memory import MemStrategy
 from .models.loras import LORAS
-from .models.spec import LORA_FAMILIES, ModelSpec
+from .models.spec import LIVE_LORA_FAMILIES, LORA_FAMILIES, ModelSpec
 from .paths import OUT_DIR
 from .samplers import apply_sampler
 from .weighting import encode_sdxl, has_weighting
@@ -150,9 +150,12 @@ def _apply_lora_stack(pipe: Any, g: GenConfig) -> None:
     loaded set resets implicitly with it. We also cache the last applied
     stack so we can skip set_adapters when the stack hasn't changed.
     """
-    if g.spec.family not in LORA_FAMILIES:
-        # flux/flux2 load fp8-quantized; PEFT can't inject into quanto layers.
-        if g.lora_stack:
+    if g.spec.family not in LIVE_LORA_FAMILIES:
+        # FUSE families (flux/flux2) have their LoRAs baked into the quantized
+        # transformer at load time, so there's nothing to apply live here —
+        # return quietly. A family in neither set genuinely can't take LoRAs,
+        # so warn if a stack was somehow set.
+        if g.lora_stack and g.spec.family not in LORA_FAMILIES:
             _log.warning(
                 "lora: family=%s does not support LoRA stacking; "
                 "%d adapter(s) in stack will be ignored: %s",
@@ -408,15 +411,21 @@ def unload(pipe: Any) -> None:
         torch.cuda.empty_cache()
 
 
-def load_spec(spec: ModelSpec, mem: MemStrategy) -> Any:
+def load_spec(
+    spec: ModelSpec, mem: MemStrategy,
+    loras: tuple[tuple[str, float], ...] = (),
+) -> Any:
     """Print a banner and dispatch to the spec's ``load`` callable.
 
     ``mem`` controls device placement (see :mod:`zimt.memory`). The active
     strategy is included in the banner so the user can see at a glance
     whether they're on a low-VRAM mode.
+
+    ``loras`` is the fuse-at-load stack passed to FUSE-family loaders
+    (flux/flux2); other loaders ignore it.
     """
     print(f"loading {spec.name}: {spec.description}  [mem={mem.describe()}]")
     t0 = time.time()
-    pipe = spec.load(DEVICE, mem)
+    pipe = spec.load(DEVICE, mem, loras)
     print(f"loaded in {time.time() - t0:.1f}s")
     return pipe

@@ -59,4 +59,17 @@ LORAS: dict[str, LoraSpec] = {
         default_weight=0.8,
         trigger_tags="pronmstr",
     ),
+
+    # ---- FLUX.1-dev LoRAs ----
+    # fp8 family: this is fused into the bf16 transformer at load time and the
+    # result re-quantized, so adding/removing it reloads the model.
+    "flux-uncensored": LoraSpec(
+        name="flux-uncensored",
+        description="Flux-uncensored — NSFW/uncensored LoRA for FLUX.1-dev (fused at load).",
+        repo_id="kenerateai/Flux-uncensored",
+        family="flux",
+        compatible_with=["flux"],
+        weight_name="lora.safetensors",
+        default_weight=0.8,
+    ),
 }

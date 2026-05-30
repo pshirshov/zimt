@@ -29,14 +29,16 @@ def make_sdxl_loader(
     repo_id: str,
     *,
     use_fp16_fix_vae: bool = True,
-) -> Callable[[str, MemStrategy], Any]:
-    """Return a ``load(device, mem) -> pipeline`` callable for the given HF repo.
+) -> Callable[..., Any]:
+    """Return a ``load(device, mem, loras=()) -> pipeline`` callable.
 
     ``mem`` controls device placement: see :mod:`zimt.memory` for the four
-    strategies and their tradeoffs.
+    strategies and their tradeoffs. ``loras`` is accepted for contract
+    uniformity but ignored — SDXL applies LoRAs live (see
+    generate._apply_lora_stack), not at load.
     """
 
-    def load(device: str, mem: MemStrategy) -> Any:
+    def load(device: str, mem: MemStrategy, loras: tuple = ()) -> Any:
         from diffusers import (  # type: ignore[import-not-found]
             AutoencoderKL,
             StableDiffusionXLPipeline,

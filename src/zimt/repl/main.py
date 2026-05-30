@@ -14,6 +14,7 @@ from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
 from ..memory import DEFAULT as DEFAULT_MEM, MemArgError, MemStrategy, parse_mem_args
 from ..models.custom import reload_custom_into_registries
 from ..models.registry import MODELS
+from ..models.spec import FUSE_LORA_FAMILIES
 from ..preview import IN_TMUX, detect_protocol, preview
 from .commands import parse_commands
 from .history import init_readline
@@ -214,7 +215,8 @@ def repl_main() -> int:
                     unload(pipe)
                     pipe = None
                     try:
-                        pipe = load_spec(MODELS[name], mem)
+                        # Preserve the active stack (re-fuses for fp8 families).
+                        pipe = load_spec(MODELS[name], mem, tuple(g.lora_stack))
                     except Exception as e:
                         print(f"reload failed: {e}")
                         g = None
@@ -224,11 +226,29 @@ def repl_main() -> int:
                 if not args:
                     print(f"active loras: {format_stack(g.lora_stack)}")
                     continue
+                # FUSE families (flux/flux2) fuse LoRAs into the fp8
+                # transformer at load, so a change reloads; LIVE families
+                # apply in place. Work on a copy to detect a real change.
+                new_stack = list(g.lora_stack)
                 try:
-                    for ln in apply_lora_args(g.lora_stack, [args[0]], g.spec):
+                    for ln in apply_lora_args(new_stack, [args[0]], g.spec):
                         print(ln)
                 except LoraCmdError as e:
                     print(f"/lora: {e}")
+                    continue
+                if (g.spec.family in FUSE_LORA_FAMILIES
+                        and tuple(new_stack) != tuple(g.lora_stack)):
+                    print(f"reloading {g.spec.name} to fuse LoRA changes (fp8) ...")
+                    unload(pipe)
+                    pipe = None
+                    try:
+                        pipe = load_spec(MODELS[g.spec.name], mem, tuple(new_stack))
+                        g.lora_stack = new_stack
+                    except Exception as e:
+                        print(f"reload failed: {e}")
+                        g = None
+                else:
+                    g.lora_stack = new_stack
             elif cmd == "/tokenize":
                 if not _require_pipe(pipe) or g is None:
                     continue

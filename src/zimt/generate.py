@@ -253,6 +253,7 @@ def generate(
     raw: bool,
     on_step: Callable[[int, int], None] | None = None,
     command_line: str = "",
+    out_dir: str = OUT_DIR,
 ) -> str:
     """Run a single generation, save the PNG, return its path.
 
@@ -267,6 +268,10 @@ def generate(
     the PNG metadata so the image can round-trip back to its source
     line. Defaults to ``""`` so older callers that don't have a line
     handy keep working.
+
+    ``out_dir`` is the directory the PNG is saved into; defaults to
+    :data:`OUT_DIR`. The web UI passes a per-profile directory
+    (``OUT_DIR/<profile>``); the REPL uses the default.
     """
     # Dynamic-prompt expansion happens here — once the seed is known and
     # before compose_prompt prepends any model score-tag prefix. That
@@ -329,7 +334,7 @@ def generate(
     dt = time.time() - t0
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    out = os.path.join(OUT_DIR, f"{ts}-{g.spec.name}-seed{seed}.png")
+    out = os.path.join(out_dir, f"{ts}-{g.spec.name}-seed{seed}.png")
     image.save(
         out,
         pnginfo=_pnginfo(

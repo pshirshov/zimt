@@ -11,32 +11,19 @@ let modalEntry = null;
 let jobs = new Map();        // jobId -> job (preserve insertion order via Map)
 const MAX_QUEUE_SHOWN = 30;
 
-// Stored as [{text, fav}]. Legacy entries were bare strings — migrated
-// transparently on read. `recents()` returns the full object list (favs
-// kept untrimmed; non-favs capped at 50). `history()` returns just the
-// text array, in display order (favs first), for arrow-key history nav.
+// Prompt history + favourites + globals are server-side, scoped to the
+// active profile (see "profiles" section below). `promptCache` mirrors the
+// active profile's prompts as `[{text, fav}]`, newest-first (server order).
+// `LS.recents()` returns a copy of that cache; `LS.history()` returns the
+// text array in display order (favs first) for arrow-key nav. Mutations
+// route through RPC with optimistic local updates — see pushRecent /
+// toggleRecentFav / deleteRecent and the profiles section.
+let promptCache = [];          // [{text, fav}] — active profile's prompts
 const LS = {
-  recents: () => {
-    const raw = JSON.parse(localStorage.getItem("zimt.history") || "[]");
-    const out = [];
-    const seen = new Set();
-    for (const e of raw) {
-      const o = typeof e === "string" ? { text: e, fav: false } : e;
-      if (!o || typeof o.text !== "string" || seen.has(o.text)) continue;
-      seen.add(o.text);
-      out.push({ text: o.text, fav: Boolean(o.fav) });
-    }
-    return out;
-  },
-  setRecents: (xs) => {
-    const favs = xs.filter(e => e.fav);
-    const rest = xs.filter(e => !e.fav).slice(0, 50);
-    localStorage.setItem("zimt.history", JSON.stringify([...favs, ...rest]));
-  },
+  recents: () => promptCache.map(e => ({ text: e.text, fav: e.fav })),
   history: () => {
-    const xs = LS.recents();
-    const favs = xs.filter(e => e.fav).map(e => e.text);
-    const rest = xs.filter(e => !e.fav).map(e => e.text);
+    const favs = promptCache.filter(e => e.fav).map(e => e.text);
+    const rest = promptCache.filter(e => !e.fav).map(e => e.text);
     return [...favs, ...rest];
   },
 };
@@ -70,9 +57,9 @@ function dispatchEvent(m) {
   if (!m || typeof m !== "object") return;
   if (m.type === "state") onStateUpdate(m.state);
   else if (m.type === "job") onJob(m.job);
-  else if (m.type === "output_added") onOutputAdded(m.entry);
-  else if (m.type === "favorite_changed") onFavoriteChanged(m.entry);
-  else if (m.type === "outputs_cleared") refreshOutputs();
+  else if (m.type === "output_added") onOutputAdded(m.entry, m.profile);
+  else if (m.type === "favorite_changed") onFavoriteChanged(m.entry, m.profile);
+  else if (m.type === "outputs_cleared") { if (m.profile === activeProfileName()) refreshOutputs(); }
   else if (m.type === "jobs_cleared") {
     for (const id of m.ids) jobs.delete(id);
     renderQueue();
@@ -576,12 +563,22 @@ $("error-popup-copy").onclick = () => {
 };
 
 // ---------- thumbnails ----------
-function onOutputAdded(entry) {
+// Build a profile-scoped image URL. Outputs live under
+// /api/outputs/<profile>/<file>; the active profile supplies the segment.
+function _outUrl(name, thumb) {
+  const prof = activeProfileName() || "Default";
+  const base = `/api/outputs/${encodeURIComponent(prof)}/${encodeURIComponent(name)}`;
+  return thumb ? `${base}?thumb=${thumb}` : base;
+}
+function onOutputAdded(entry, profile) {
+  // Per-tab scoping: ignore additions for a profile this tab isn't viewing.
+  if (profile !== activeProfileName()) return;
   if (currentTab === "all") {
     outputs.unshift(entry); totalCount += 1; renderThumbs();
   }
 }
-function onFavoriteChanged(entry) {
+function onFavoriteChanged(entry, profile) {
+  if (profile !== activeProfileName()) return;
   const idx = outputs.findIndex(x => x.name === entry.name);
   if (currentTab === "favs") {
     if (entry.fav && idx < 0) { outputs.unshift(entry); totalCount += 1; }
@@ -601,7 +598,7 @@ function renderThumbs() {
   for (const e of outputs) {
     const d = document.createElement("div"); d.className = "thumb";
     const img = document.createElement("img"); img.loading = "lazy";
-    img.src = `/api/outputs/${encodeURIComponent(e.name)}?thumb=192`;
+    img.src = _outUrl(e.name, 192);
     d.appendChild(img);
     // Three stacked reload buttons (top to bottom):
     //  1. "1:1"  — fill the prompt with the exact original command line
@@ -655,8 +652,10 @@ function renderThumbs() {
   $("load-more").style.display = hasMore ? "" : "none";
 }
 async function toggleFavorite(entry) {
-  try { await wsRequest("output_favorite", { name: entry.name, favorite: !entry.fav }); }
-  catch (e) { appendLog(`favorite: ${e.message}`, "error"); }
+  try {
+    await wsRequest("output_favorite",
+      { profile: activeProfileName(), name: entry.name, favorite: !entry.fav });
+  } catch (e) { appendLog(`favorite: ${e.message}`, "error"); }
 }
 // Copy the full (non-thumbnail) image to the OS clipboard as image/png.
 // The Clipboard API needs a Promise<Blob> handed to ClipboardItem so the
@@ -667,7 +666,7 @@ async function copyImageToClipboard(entry, btn) {
   const prev = btn.textContent;
   btn.disabled = true;
   try {
-    const url = `/api/outputs/${encodeURIComponent(entry.name)}`;
+    const url = _outUrl(entry.name);
     const blob = await fetch(url).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.blob();
@@ -685,9 +684,15 @@ async function copyImageToClipboard(entry, btn) {
   }
 }
 async function loadOutputs(tab, page) {
-  return wsRequest("outputs_list", { tab, page, per_page: 60 });
+  return wsRequest("outputs_list", { profile: activeProfileName(), tab, page, per_page: 60 });
 }
 async function refreshOutputs() {
+  // No active profile yet (pre-boot) → nothing to show.
+  if (activeProfileId == null) {
+    outputs = []; hasMore = false; totalCount = 0; currentPage = 1;
+    renderThumbs();
+    return;
+  }
   try {
     const r = await loadOutputs(currentTab, 1);
     outputs = r.entries; hasMore = r.has_more; totalCount = r.total; currentPage = 1;
@@ -718,7 +723,7 @@ $("load-more").onclick = loadMore;
 $("btn-cleanup-outputs").onclick = async () => {
   if (!confirm("Delete every non-favorite output? Favorites are kept.")) return;
   try {
-    const r = await wsRequest("outputs_cleanup");
+    const r = await wsRequest("outputs_cleanup", { profile: activeProfileName() });
     appendLog(`cleaned ${r.deleted} files`);
     await refreshOutputs();
   } catch (e) { appendLog(`cleanup: ${e.message}`, "error"); }
@@ -763,18 +768,21 @@ function _syncWrapBtn() {
     : "currently ellipsing long prompts — click to wrap";
 }
 _syncWrapBtn();
-$("btn-clear-recent").onclick = () => {
-  const xs = LS.recents();
-  const favs = xs.filter(e => e.fav);
-  const removed = xs.length - favs.length;
+$("btn-clear-recent").onclick = async () => {
+  if (activeProfileId == null) return;
+  const favs = promptCache.filter(e => e.fav);
+  const removed = promptCache.length - favs.length;
   if (!removed) {
     appendLog("nothing to clear (no non-favourite prompts)");
     return;
   }
   if (!confirm(`Clear ${removed} non-favourite recent prompt(s)? Favourites are kept.`)) return;
-  LS.setRecents(favs);
+  promptCache = favs;          // optimistic
   renderRecent();
-  appendLog(`cleared ${removed} non-favourite prompt(s)`);
+  try {
+    const r = await wsRequest("prompts_clear", { profile_id: activeProfileId });
+    appendLog(`cleared ${r.removed} non-favourite prompt(s)`);
+  } catch (e) { appendLog(`clear: ${e.message}`, "error"); await hydrate(activeProfileId); }
 };
 
 // ---------- recent prompts ----------
@@ -846,25 +854,34 @@ function loadPromptIntoInput(text) {
   autoResize();
 }
 function toggleRecentFav(text) {
-  const xs = LS.recents();
-  const e = xs.find(x => x.text === text);
+  if (activeProfileId == null) return;
+  const e = promptCache.find(x => x.text === text);
   if (!e) return;
-  e.fav = !e.fav;
-  LS.setRecents(xs);
+  const fav = !e.fav;
+  e.fav = fav;                 // optimistic
   renderRecent();
+  wsRequest("prompt_fav", { profile_id: activeProfileId, text, fav })
+    .catch(err => { appendLog(`favourite: ${err.message}`, "error"); hydrate(activeProfileId); });
 }
 function deleteRecent(text) {
-  LS.setRecents(LS.recents().filter(e => e.text !== text));
+  if (activeProfileId == null) return;
+  promptCache = promptCache.filter(e => e.text !== text);   // optimistic
   renderRecent();
+  wsRequest("prompt_delete", { profile_id: activeProfileId, text })
+    .catch(err => { appendLog(`delete: ${err.message}`, "error"); hydrate(activeProfileId); });
 }
 function pushRecent(p) {
-  const xs = LS.recents();
-  const existing = xs.find(e => e.text === p);
+  if (activeProfileId == null) return;
+  // Optimistic: move/insert at front keeping any existing fav flag. The
+  // server applies the same upsert + non-fav cap and returns the canonical
+  // list, which we reconcile against on response.
+  const existing = promptCache.find(e => e.text === p);
   const fav = existing ? existing.fav : false;
-  const without = xs.filter(e => e.text !== p);
-  without.unshift({ text: p, fav });
-  LS.setRecents(without);
+  promptCache = [{ text: p, fav }, ...promptCache.filter(e => e.text !== p)];
   renderRecent();
+  wsRequest("prompt_push", { profile_id: activeProfileId, text: p })
+    .then(r => { if (r && Array.isArray(r.prompts)) { promptCache = r.prompts; renderRecent(); } })
+    .catch(err => { appendLog(`history: ${err.message}`, "error"); });
 }
 
 // ---------- modal ----------
@@ -874,7 +891,7 @@ function updateModalFavButton() {
 }
 function openModal(entry) {
   modalEntry = entry;
-  $("modal-img").src = `/api/outputs/${encodeURIComponent(entry.name)}`;
+  $("modal-img").src = _outUrl(entry.name);
   // Add the metadata expanded_prompt right after raw_prompt so a
   // user looking at a template-generated image sees both the typed
   // template and the resolved text at a glance.
@@ -1392,7 +1409,7 @@ async function submit({ keepValue = false } = {}) {
     autoResize();
   }
   const sentLine = applyGlobalsToLine(line);
-  try { await wsRequest("exec", { line: sentLine }); }
+  try { await wsRequest("exec", { line: sentLine, profile: activeProfileName() }); }
   catch (e) {
     appendLog(`exec: ${e.message}`, "error");
     if (!keepValue) { input.value = saved; autoResize(); }
@@ -1549,12 +1566,250 @@ function _initGpuMenu() {
 }
 _initGpuMenu();
 
+// ---------- profiles ----------
+// A profile is a named, isolated set of {prompt history, favourites,
+// globals}, persisted server-side in SQLite. Selection is per-browser-tab:
+// the active id lives in localStorage and travels as `profile_id` on every
+// scoped RPC. The server keeps no active-profile state, so nothing here
+// goes through the `state` broadcast.
+const PROFILE_LS_KEY = "zimt.profile-id";
+const MIGRATED_LS_KEY = "zimt.db-migrated";
+let activeProfileId = null;
+let profilesList = [];          // [{id, name, prompt_count}]
+
+function _activeProfile() {
+  return profilesList.find(p => p.id === activeProfileId) || null;
+}
+function activeProfileName() {
+  const p = _activeProfile();
+  return p ? p.name : null;
+}
+function renderProfileButton() {
+  const p = _activeProfile();
+  $("profile-name").textContent = p ? p.name : "profile";
+}
+
+// Parse legacy localStorage history into [{text, fav}] (display order),
+// tolerating the bare-string entries the old store also accepted.
+function _legacyHistory() {
+  let raw;
+  try { raw = JSON.parse(localStorage.getItem("zimt.history") || "[]"); }
+  catch { return []; }
+  if (!Array.isArray(raw)) return [];
+  const out = [], seen = new Set();
+  for (const e of raw) {
+    const o = typeof e === "string" ? { text: e, fav: false } : e;
+    if (!o || typeof o.text !== "string" || !o.text || seen.has(o.text)) continue;
+    seen.add(o.text);
+    out.push({ text: o.text, fav: Boolean(o.fav) });
+  }
+  return out;
+}
+
+// One-time migration of this browser's localStorage prompts/globals into
+// the server DB. Runs only on a genuinely fresh DB (a single empty Default
+// profile), so a browser connecting to an already-populated server adopts
+// the server data instead of merging/duplicating. Idempotent via
+// MIGRATED_LS_KEY.
+async function _maybeMigrate(defaultId) {
+  if (localStorage.getItem(MIGRATED_LS_KEY)) return false;
+  const prompts = _legacyHistory();
+  const globals = localStorage.getItem("zimt.globals") || "";
+  if (!prompts.length && !globals) {
+    localStorage.setItem(MIGRATED_LS_KEY, "1");
+    return false;
+  }
+  try {
+    if (globals) {
+      await wsRequest("profile_globals_set", { profile_id: defaultId, text: globals });
+    }
+    // Push oldest-first so the newest ends up at the front; re-apply fav
+    // flags after insert (prompt_push always stores fav=0 for new rows).
+    for (let i = prompts.length - 1; i >= 0; i--) {
+      await wsRequest("prompt_push", { profile_id: defaultId, text: prompts[i].text });
+      if (prompts[i].fav) {
+        await wsRequest("prompt_fav",
+          { profile_id: defaultId, text: prompts[i].text, fav: true });
+      }
+    }
+    localStorage.setItem(MIGRATED_LS_KEY, "1");
+    appendLog(`migrated ${prompts.length} prompt(s) into "Default"`);
+    return true;
+  } catch (e) {
+    appendLog(`migrate: ${e.message}`, "error");
+    return false;
+  }
+}
+
+async function _refreshProfiles() {
+  const r = await wsRequest("profiles_list");
+  profilesList = Array.isArray(r.profiles) ? r.profiles : [];
+  return profilesList;
+}
+
+// Load a profile's prompts + globals into the in-memory caches and repaint.
+async function hydrate(id) {
+  try {
+    const p = await wsRequest("profile_get", { profile_id: id });
+    activeProfileId = p.id;
+    localStorage.setItem(PROFILE_LS_KEY, String(p.id));
+    promptCache = Array.isArray(p.prompts) ? p.prompts : [];
+    _setGlobalsTextareaValue(typeof p.globals === "string" ? p.globals : "");
+    renderRecent();
+    renderProfileButton();
+    // The gallery is profile-scoped — reload it for the newly active profile.
+    await refreshOutputs();
+  } catch (e) {
+    appendLog(`profile load: ${e.message}`, "error");
+  }
+}
+
+async function bootProfiles() {
+  let profiles;
+  try { profiles = await _refreshProfiles(); }
+  catch (e) { appendLog(`profiles: ${e.message}`, "error"); return; }
+  if (!profiles.length) return;   // server always auto-creates a Default
+
+  // Migrate into the lone empty Default the very first time only.
+  const lone = profiles.length === 1 ? profiles[0] : null;
+  if (lone && lone.prompt_count === 0) {
+    const migrated = await _maybeMigrate(lone.id);
+    if (migrated) await _refreshProfiles();
+  } else {
+    localStorage.setItem(MIGRATED_LS_KEY, "1");
+  }
+
+  const storedId = parseInt(localStorage.getItem(PROFILE_LS_KEY) || "", 10);
+  const exists = profilesList.find(p => p.id === storedId);
+  await hydrate(exists ? storedId : profilesList[0].id);
+  renderProfileMenu();
+}
+
+// ----- dropdown menu + settings dialog -----
+function _positionProfileMenu() {
+  const btn = $("profile-btn"), menu = $("profile-menu");
+  if (!btn || !menu) return;
+  const r = btn.getBoundingClientRect();
+  const menuW = menu.offsetWidth || 200;
+  const left = Math.max(4, Math.min(r.left, window.innerWidth - menuW - 4));
+  menu.style.left = Math.round(left) + "px";
+  menu.style.top = Math.round(r.bottom + 4) + "px";
+}
+function _setProfileMenu(open) {
+  const btn = $("profile-btn"), menu = $("profile-menu");
+  if (!btn || !menu) return;
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  menu.hidden = !open;
+  if (open) { renderProfileMenu(); _positionProfileMenu(); }
+}
+function renderProfileMenu() {
+  const menu = $("profile-menu");
+  if (!menu) return;
+  menu.innerHTML = "";
+  for (const p of profilesList) {
+    const row = document.createElement("div");
+    row.className = "profile-row" + (p.id === activeProfileId ? " active" : "");
+    const pick = document.createElement("button");
+    pick.type = "button"; pick.className = "profile-pick"; pick.role = "menuitem";
+    const check = document.createElement("span");
+    check.className = "profile-check";
+    check.textContent = p.id === activeProfileId ? "✓" : "";
+    pick.appendChild(check);
+    pick.appendChild(document.createTextNode(p.name));
+    pick.onclick = () => { _setProfileMenu(false); switchProfile(p.id); };
+    const gear = document.createElement("button");
+    gear.type = "button"; gear.className = "profile-gear";
+    gear.title = "profile settings"; gear.textContent = "⚙";
+    gear.onclick = (ev) => { ev.stopPropagation(); _setProfileMenu(false); openProfileSettings(p.id); };
+    row.appendChild(pick); row.appendChild(gear);
+    menu.appendChild(row);
+  }
+  const sep = document.createElement("div");
+  sep.className = "profile-menu-sep";
+  menu.appendChild(sep);
+  const add = document.createElement("button");
+  add.type = "button"; add.className = "profile-add"; add.role = "menuitem";
+  add.textContent = "+ add profile";
+  add.onclick = () => { _setProfileMenu(false); addProfile(); };
+  menu.appendChild(add);
+}
+async function switchProfile(id) {
+  if (id === activeProfileId) return;
+  await hydrate(id);
+}
+async function addProfile() {
+  const name = (window.prompt("New profile name:") || "").trim();
+  if (!name) return;
+  try {
+    const r = await wsRequest("profile_create", { name });
+    await _refreshProfiles();
+    await hydrate(r.profile.id);
+  } catch (e) { appendLog(`add profile: ${e.message}`, "error"); }
+}
+let _settingsProfileId = null;
+function openProfileSettings(id) {
+  const p = profilesList.find(x => x.id === id);
+  if (!p) return;
+  _settingsProfileId = id;
+  $("profile-modal-name").textContent = p.name;
+  $("profile-modal-count").textContent =
+    `${p.prompt_count} prompt${p.prompt_count === 1 ? "" : "s"} stored`;
+  const del = $("profile-modal-delete");
+  del.disabled = profilesList.length <= 1;
+  del.title = del.disabled ? "cannot delete the last remaining profile" : "";
+  $("profile-modal").classList.add("open");
+}
+function _closeProfileSettings() {
+  $("profile-modal").classList.remove("open");
+  _settingsProfileId = null;
+}
+function _initProfileUi() {
+  const btn = $("profile-btn"), menu = $("profile-menu");
+  if (!btn || !menu) return;
+  btn.addEventListener("click", (ev) => { ev.stopPropagation(); _setProfileMenu(menu.hidden); });
+  btn.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); _setProfileMenu(menu.hidden); }
+    else if (ev.key === "Escape") _setProfileMenu(false);
+  });
+  document.addEventListener("click", (ev) => {
+    if (menu.hidden) return;
+    if (menu.contains(ev.target) || btn.contains(ev.target)) return;
+    _setProfileMenu(false);
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !menu.hidden) _setProfileMenu(false);
+  });
+  window.addEventListener("resize", () => { if (!menu.hidden) _positionProfileMenu(); });
+  window.addEventListener("scroll", () => { if (!menu.hidden) _positionProfileMenu(); },
+                         { passive: true });
+
+  $("profile-modal-close").onclick = _closeProfileSettings;
+  $("profile-modal").onclick = (e) => { if (e.target === $("profile-modal")) _closeProfileSettings(); };
+  $("profile-modal-delete").onclick = async () => {
+    const id = _settingsProfileId;
+    if (id == null) return;
+    const p = profilesList.find(x => x.id === id);
+    if (!confirm(`Delete profile "${p ? p.name : id}" and all its prompts? This cannot be undone.`)) return;
+    try {
+      await wsRequest("profile_delete", { profile_id: id });
+      await _refreshProfiles();
+      _closeProfileSettings();
+      // If we deleted the active profile, fall back to the first remaining.
+      if (id === activeProfileId) await hydrate(profilesList[0].id);
+      else renderProfileMenu();
+    } catch (e) { appendLog(`delete profile: ${e.message}`, "error"); }
+  };
+}
+_initProfileUi();
+
 // ---------- globals editor ----------
 // A persistent block of template variable definitions (e.g.
 //   ${shoes=[runners|sneakers|high heels|platform boots]}
-// ) that's spliced into every generation line at submit time. Lives in
-// localStorage under `zimt.globals`. The textarea/highlight pair mirrors
-// the prompt editor's overlay technique so the same syntax highlighter
+// ) that's spliced into every generation line at submit time. Persisted
+// server-side per active profile (see the profiles section); held in the
+// `globalsText` in-memory cache, hydrated on profile switch and saved
+// debounced on edit. The textarea/highlight pair mirrors the prompt
+// editor's overlay technique so the same syntax highlighter
 // (renderPromptHTML) paints both.
 //
 // Injection rules — see CLAUDE.md `src/zimt/repl/commands.py` for the
@@ -1567,7 +1822,6 @@ _initGpuMenu();
 //     The parser treats any non-command token anywhere on the line as
 //     prompt text, so positioning is cosmetic — but "after /model X"
 //     reads naturally and keeps the user's typed prompt intact.
-const GLOBALS_LS_KEY = "zimt.globals";
 const GLOBALS_BEGIN_MARKER = "<!-- globals:begin -->";
 const GLOBALS_END_MARKER = "<!-- globals:end -->";
 // Arity table mirrors COMMAND_ARITY in src/zimt/repl/commands.py. Kept
@@ -1613,8 +1867,31 @@ function _linePromptAcc(line) {
   }
   return acc.join(" ");
 }
+// globalsText holds the active profile's globals block in memory; it is
+// hydrated from the server on profile switch and persisted (debounced) on
+// edit. Injection (applyGlobalsToLine) and markers are unchanged.
+let globalsText = "";
+let _globalsTextarea = null;
+let _globalsSaveTimer = null;
 function getGlobalsText() {
-  return localStorage.getItem(GLOBALS_LS_KEY) || "";
+  return globalsText;
+}
+function _setGlobalsTextareaValue(text) {
+  globalsText = text;
+  if (_globalsTextarea) {
+    _globalsTextarea.value = text;
+    const hl = $("globals-highlight");
+    if (hl) hl.innerHTML = renderPromptHTML(text);
+  }
+}
+function _saveGlobalsDebounced() {
+  if (activeProfileId == null) return;
+  if (_globalsSaveTimer) clearTimeout(_globalsSaveTimer);
+  const pid = activeProfileId;
+  _globalsSaveTimer = setTimeout(() => {
+    wsRequest("profile_globals_set", { profile_id: pid, text: globalsText })
+      .catch(err => appendLog(`globals: ${err.message}`, "error"));
+  }, 400);
 }
 function applyGlobalsToLine(line) {
   const g = getGlobalsText().trim();
@@ -1644,12 +1921,14 @@ function _initGlobalsEditor() {
   const ta = $("globals-input");
   const hl = $("globals-highlight");
   if (!ta || !hl) return;
-  ta.value = getGlobalsText();
+  _globalsTextarea = ta;
+  ta.value = globalsText;
   const render = () => { hl.innerHTML = renderPromptHTML(ta.value); };
   render();
   ta.addEventListener("input", () => {
-    localStorage.setItem(GLOBALS_LS_KEY, ta.value);
+    globalsText = ta.value;
     render();
+    _saveGlobalsDebounced();
   });
   ta.addEventListener("keydown", (e) => {
     if (e.key === "/" && (e.ctrlKey || e.metaKey)) {
@@ -1657,8 +1936,9 @@ function _initGlobalsEditor() {
       const r = toggleComment(ta.value, ta.selectionStart, ta.selectionEnd);
       ta.value = r.value;
       ta.setSelectionRange(r.selectionStart, r.selectionEnd);
-      localStorage.setItem(GLOBALS_LS_KEY, ta.value);
+      globalsText = ta.value;
       render();
+      _saveGlobalsDebounced();
     }
   });
   ta.addEventListener("scroll", () => { hl.scrollTop = ta.scrollTop; });
@@ -2084,8 +2364,11 @@ async function init() {
   renderHighlight();
   connectWs();
   // State arrives as a "state" event on WS connect (server hello), so
-  // no explicit fetch is needed. Outputs do still need a one-shot pull.
+  // no explicit fetch is needed. Outputs + profiles still need a one-shot
+  // pull (the connection manager queues these until the socket is open).
   try { await refreshOutputs(); }
   catch (e) { appendLog(`init: ${e.message}`, "error"); }
+  try { await bootProfiles(); }
+  catch (e) { appendLog(`profiles init: ${e.message}`, "error"); }
 }
 init();

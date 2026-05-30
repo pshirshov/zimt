@@ -28,6 +28,13 @@
         <button class="ltab" data-ltab="models" role="tab"
                 aria-selected="false">models</button>
       </div>
+      <button id="profile-btn" class="pill profile-btn" type="button"
+              aria-haspopup="menu" aria-expanded="false"
+              title="switch profile">
+        <span id="profile-name">profile</span>
+        <span class="profile-caret" aria-hidden="true">▾</span>
+      </button>
+      <div id="profile-menu" class="profile-menu" role="menu" hidden></div>
       <span id="ws-state" class="pill">disconnected</span>
       <span id="model-state" class="pill">no model</span>
       <span id="gpu-stats" class="pill gpu-pill" title="" role="button" tabindex="0"
@@ -282,6 +289,21 @@
       <div class="modal-actions">
         <button id="error-popup-copy">copy</button>
         <button id="error-popup-close" style="margin-left: auto;">✕ close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal small" id="profile-modal" aria-hidden="true" role="dialog"
+     aria-labelledby="profile-modal-title">
+  <div class="modal-inner">
+    <div class="modal-side" style="flex: 1 1 auto;">
+      <h3 id="profile-modal-title" style="margin: 0 0 8px;">profile settings</h3>
+      <div class="profile-modal-name" id="profile-modal-name"></div>
+      <div class="profile-modal-count" id="profile-modal-count"></div>
+      <div class="modal-actions" style="margin-top: 14px;">
+        <button id="profile-modal-delete" class="danger-btn" type="button">delete profile</button>
+        <button id="profile-modal-close" type="button" style="margin-left: auto;">✕ close</button>
       </div>
     </div>
   </div>

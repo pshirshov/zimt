@@ -38,7 +38,10 @@ from pydantic import BaseModel
 
 from .. import gpu_stats
 from ..models.registry import MODELS
-from ..paths import FAV_DIR, OUT_DIR, STATIC_DIR, ensure_dirs
+from ..paths import (
+    DEFAULT_PROFILE, OUT_DIR, STATIC_DIR, ensure_dirs, migrate_outputs_layout,
+    profile_fav_dir, profile_out_dir, valid_profile_name,
+)
 from .downloads import install as install_download_hook
 from .exec_api import ExecBody, api_exec as exec_handler
 from .loader import ModelLoadError, load_model
@@ -51,6 +54,7 @@ from .outputs import list_outputs, read_png_meta, resolve_output, safe_name
 from .prefetch import PrefetchError, prefetch_model
 from .rpc import dispatch, method, rpc_error
 from .state import CANCEL_EVENTS, EXECUTOR, PIPE_LOCK, STATE, register_task
+from .store import ProfileNotFound, get_store
 from .ws import broadcast, emit_job, emit_state
 
 app = FastAPI()
@@ -143,9 +147,10 @@ async def index() -> FileResponse:
     )
 
 
-@app.get("/api/outputs/{name}")
-async def api_output(name: str, thumb: int | None = Query(default=None)) -> Response:
-    found = resolve_output(name)
+@app.get("/api/outputs/{profile}/{name}")
+async def api_output(profile: str, name: str,
+                     thumb: int | None = Query(default=None)) -> Response:
+    found = resolve_output(profile, name)
     if not found:
         raise HTTPException(status_code=404, detail="not found")
     path, _ = found
@@ -182,6 +187,14 @@ async def _on_startup() -> None:
     # this point on. Capture the running loop so the tqdm subclass (which
     # is called from a worker thread) can schedule WS broadcasts here.
     install_download_hook(asyncio.get_running_loop())
+    # Relocate any pre-profile images into the Default profile folder and make
+    # sure a backing Default profile row exists for them. Both are idempotent.
+    ensure_dirs()
+    migrate_outputs_layout()
+    try:
+        get_store().ensure_profile(DEFAULT_PROFILE)
+    except Exception as e:
+        print(f"zimt: ensure Default profile failed: {e!r}")
     # Load user-supplied LoRA / base descriptors from disk.
     report = reload_custom_into_registries()
     if report["errors"]:
@@ -394,8 +407,17 @@ async def _rpc_jobs_clear_completed(_params: dict[str, Any]) -> dict[str, Any]:
     return {"cleared": len(cleared)}
 
 
+def _outputs_profile(params: dict[str, Any]) -> str:
+    """Validated active-profile name for an output-scoped request."""
+    profile = params.get("profile", DEFAULT_PROFILE)
+    if not isinstance(profile, str) or not valid_profile_name(profile):
+        raise rpc_error("missing or invalid profile")
+    return profile
+
+
 @method("outputs_list")
 async def _rpc_outputs_list(params: dict[str, Any]) -> dict[str, Any]:
+    profile = _outputs_profile(params)
     tab = params.get("tab", "all")
     if tab not in ("all", "favs"):
         raise rpc_error("tab must be 'all' or 'favs'")
@@ -410,22 +432,24 @@ async def _rpc_outputs_list(params: dict[str, Any]) -> dict[str, Any]:
         raise rpc_error("page must be >= 1")
     if per_page < 1 or per_page > 200:
         raise rpc_error("per_page must be in 1..200")
-    return list_outputs(tab=tab, page=page, per_page=per_page)
+    return list_outputs(profile, tab=tab, page=page, per_page=per_page)
 
 
 @method("output_favorite")
 async def _rpc_output_favorite(params: dict[str, Any]) -> dict[str, Any]:
+    profile = _outputs_profile(params)
     name = params.get("name")
     favorite = params.get("favorite")
     if not isinstance(name, str) or not isinstance(favorite, bool):
         raise rpc_error("missing name or favorite flag")
-    found = resolve_output(name)
+    found = resolve_output(profile, name)
     if not found:
         raise rpc_error("not found")
     src, is_fav = found
     if is_fav == favorite:
         return {"name": name, "fav": is_fav}
-    dst_dir = FAV_DIR if favorite else OUT_DIR
+    dst_dir = profile_fav_dir(profile) if favorite else profile_out_dir(profile)
+    os.makedirs(dst_dir, exist_ok=True)
     dst = os.path.join(dst_dir, name)
     if os.path.exists(dst):
         raise rpc_error("destination already exists")
@@ -438,22 +462,24 @@ async def _rpc_output_favorite(params: dict[str, Any]) -> dict[str, Any]:
         mtime, size = 0.0, 0
     entry = {"name": name, "mtime": mtime, "size": size,
              "fav": favorite, "metadata": new_meta}
-    await broadcast({"type": "favorite_changed", "entry": entry})
+    await broadcast({"type": "favorite_changed", "profile": profile, "entry": entry})
     return entry
 
 
 @method("outputs_cleanup")
-async def _rpc_outputs_cleanup(_params: dict[str, Any]) -> dict[str, Any]:
-    """Delete every PNG directly in OUT_DIR. Files in OUT_DIR/fav/ are spared."""
+async def _rpc_outputs_cleanup(params: dict[str, Any]) -> dict[str, Any]:
+    """Delete every PNG directly in the profile's dir. Favourites are spared."""
+    profile = _outputs_profile(params)
     deleted = 0
-    if os.path.isdir(OUT_DIR):
-        for name in os.listdir(OUT_DIR):
+    main_dir = profile_out_dir(profile)
+    if os.path.isdir(main_dir):
+        for name in os.listdir(main_dir):
             if name.startswith(".") or not name.lower().endswith(".png"):
                 continue
-            path = os.path.join(OUT_DIR, name)
+            path = os.path.join(main_dir, name)
             if os.path.islink(path) or not os.path.isfile(path):
                 # Skip symlinks: os.path.isfile follows symlinks and would
-                # allow os.remove to delete a target outside OUT_DIR. We only
+                # allow os.remove to delete a target outside the dir. We only
                 # want to delete real regular files.
                 continue
             try:
@@ -461,8 +487,139 @@ async def _rpc_outputs_cleanup(_params: dict[str, Any]) -> dict[str, Any]:
                 deleted += 1
             except OSError:
                 pass
-    await broadcast({"type": "outputs_cleared"})
+    await broadcast({"type": "outputs_cleared", "profile": profile})
     return {"deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# Profiles — prompt history / favourites / globals (SQLite-backed)
+# ---------------------------------------------------------------------------
+#
+# Profile selection is per-browser-tab: the client stores the active
+# profile id in localStorage and passes it as `profile_id` on every
+# scoped method. The server keeps no "active profile" state, so these
+# methods never touch STATE or broadcast — they're plain request/response.
+
+def _profile_id(params: dict[str, Any]) -> int:
+    pid = params.get("profile_id")
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        raise rpc_error("missing or invalid profile_id")
+    return pid
+
+
+def _profile_text(params: dict[str, Any]) -> str:
+    text = params.get("text")
+    if not isinstance(text, str) or not text:
+        raise rpc_error("missing text")
+    return text
+
+
+@method("profiles_list")
+async def _rpc_profiles_list(_params: dict[str, Any]) -> dict[str, Any]:
+    return {"profiles": get_store().list_profiles()}
+
+
+@method("profile_create")
+async def _rpc_profile_create(params: dict[str, Any]) -> dict[str, Any]:
+    name = params.get("name")
+    if not isinstance(name, str):
+        raise rpc_error("missing name")
+    try:
+        return {"profile": get_store().create_profile(name)}
+    except ValueError as e:
+        raise rpc_error(str(e))
+
+
+@method("profile_delete")
+async def _rpc_profile_delete(params: dict[str, Any]) -> dict[str, Any]:
+    pid = _profile_id(params)
+    try:
+        get_store().delete_profile(pid)
+    except ProfileNotFound as e:
+        raise rpc_error(str(e))
+    except ValueError as e:
+        raise rpc_error(str(e))
+    return {"ok": True}
+
+
+@method("profile_get")
+async def _rpc_profile_get(params: dict[str, Any]) -> dict[str, Any]:
+    pid = _profile_id(params)
+    try:
+        return get_store().get_profile(pid)
+    except ProfileNotFound as e:
+        raise rpc_error(str(e))
+
+
+@method("profile_import")
+async def _rpc_profile_import(params: dict[str, Any]) -> dict[str, Any]:
+    name = params.get("name")
+    globals_text = params.get("globals", "")
+    prompts = params.get("prompts", [])
+    if not isinstance(name, str):
+        raise rpc_error("missing name")
+    if not isinstance(globals_text, str):
+        raise rpc_error("globals must be a string")
+    if not isinstance(prompts, list):
+        raise rpc_error("prompts must be a list")
+    return {"profile": get_store().import_profile(name, globals_text, prompts)}
+
+
+@method("profile_globals_set")
+async def _rpc_profile_globals_set(params: dict[str, Any]) -> dict[str, Any]:
+    pid = _profile_id(params)
+    text = params.get("text", "")
+    if not isinstance(text, str):
+        raise rpc_error("text must be a string")
+    try:
+        get_store().set_globals(pid, text)
+    except ProfileNotFound as e:
+        raise rpc_error(str(e))
+    return {"ok": True}
+
+
+@method("prompt_push")
+async def _rpc_prompt_push(params: dict[str, Any]) -> dict[str, Any]:
+    pid = _profile_id(params)
+    text = _profile_text(params)
+    try:
+        return get_store().push_prompt(pid, text)
+    except ProfileNotFound as e:
+        raise rpc_error(str(e))
+
+
+@method("prompt_fav")
+async def _rpc_prompt_fav(params: dict[str, Any]) -> dict[str, Any]:
+    pid = _profile_id(params)
+    text = _profile_text(params)
+    fav = params.get("fav")
+    if not isinstance(fav, bool):
+        raise rpc_error("missing fav flag")
+    try:
+        get_store().fav_prompt(pid, text, fav)
+    except ProfileNotFound as e:
+        raise rpc_error(str(e))
+    return {"ok": True}
+
+
+@method("prompt_delete")
+async def _rpc_prompt_delete(params: dict[str, Any]) -> dict[str, Any]:
+    pid = _profile_id(params)
+    text = _profile_text(params)
+    try:
+        get_store().delete_prompt(pid, text)
+    except ProfileNotFound as e:
+        raise rpc_error(str(e))
+    return {"ok": True}
+
+
+@method("prompts_clear")
+async def _rpc_prompts_clear(params: dict[str, Any]) -> dict[str, Any]:
+    pid = _profile_id(params)
+    try:
+        return get_store().clear_prompts(pid)
+    except ProfileNotFound as e:
+        raise rpc_error(str(e))
 
 
 # ---------------------------------------------------------------------------

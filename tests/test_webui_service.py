@@ -1260,21 +1260,24 @@ class OutputsCleanupSymlinkTests(unittest.IsolatedAsyncioTestCase):
         tmpdir = tempfile.mkdtemp()
         try:
             out_dir = os.path.join(tmpdir, "out")
-            os.makedirs(out_dir)
+            # Cleanup is profile-scoped: it operates on OUT_DIR/<profile>/.
+            prof_dir = os.path.join(out_dir, "Default")
+            os.makedirs(prof_dir)
             # Sentinel file outside OUT_DIR — must not be deleted.
             sentinel = os.path.join(tmpdir, "sentinel.png")
             with open(sentinel, "wb") as f:
                 f.write(b"\x89PNG\r\n\x1a\n")  # minimal PNG magic bytes
-            # Symlink inside OUT_DIR pointing at the sentinel.
-            link_path = os.path.join(out_dir, "link.png")
+            # Symlink inside the profile dir pointing at the sentinel.
+            link_path = os.path.join(prof_dir, "link.png")
             os.symlink(sentinel, link_path)
             # A real PNG file that should be deleted.
-            real_png = os.path.join(out_dir, "real.png")
+            real_png = os.path.join(prof_dir, "real.png")
             with open(real_png, "wb") as f:
                 f.write(b"\x89PNG\r\n\x1a\n")
 
-            with patch("zimt.webui.app.OUT_DIR", out_dir):
-                result = await web_app._rpc_outputs_cleanup({})
+            with patch("zimt.webui.app.OUT_DIR", out_dir), \
+                    patch("zimt.paths.OUT_DIR", out_dir):
+                result = await web_app._rpc_outputs_cleanup({"profile": "Default"})
 
             # Sentinel outside OUT_DIR must still exist — not deleted through symlink.
             self.assertTrue(os.path.exists(sentinel),

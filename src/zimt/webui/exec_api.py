@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import io
 import math
+import os
 import random
 import re
 import threading
@@ -27,6 +28,7 @@ from ..dynamics import DynamicsSyntaxError, validate as validate_dynamics
 from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
 from ..memory import MemArgError, parse_mem_args
 from ..models.registry import MODELS
+from ..paths import DEFAULT_PROFILE, profile_fav_dir, profile_out_dir, valid_profile_name
 from ..repl.commands import parse_commands
 from .jobs import run_job
 from .loader import ModelLoadError, load_model
@@ -36,6 +38,10 @@ from .ws import emit_job, emit_log, emit_state
 
 class ExecBody(BaseModel):
     line: str
+    # Active profile name (per browser tab). Generated images are written to
+    # OUT_DIR/<profile>/. Defaults to the migration profile so non-web callers
+    # and older clients keep working.
+    profile: str = DEFAULT_PROFILE
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -191,6 +197,12 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
     cmds = parse_commands(body.line)
     if not cmds:
         return {"job_ids": [], "log": ["empty input"]}
+
+    profile = body.profile or DEFAULT_PROFILE
+    if not valid_profile_name(profile):
+        msg = f"invalid profile name: {profile!r}"
+        await emit_log(msg, level="error")
+        return {"job_ids": [], "log": [msg]}
 
     log: list[str] = []
     raw_flag = False
@@ -356,6 +368,10 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
         await emit_log(msg, level="error")
         return {"job_ids": job_ids, "log": log}
 
+    # Ensure the profile's output dirs exist before the first job writes.
+    out_dir = profile_out_dir(profile)
+    os.makedirs(profile_fav_dir(profile), exist_ok=True)
+
     for i in range(max(1, count)):
         seed = ((next_seed + i) if next_seed is not None
                 else random.randint(0, 2**31 - 1))
@@ -375,6 +391,6 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
         await emit_job(job)
         register_task(run_job(
             job, prompt_text, seed, raw_flag, g_snapshot,
-            command_line=body.line,
+            command_line=body.line, out_dir=out_dir, profile=profile,
         ))
     return {"job_ids": job_ids, "log": log}

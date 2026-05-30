@@ -12,7 +12,7 @@ from typing import Any
 
 from PIL import Image
 
-from ..paths import FAV_DIR, OUT_DIR
+from ..paths import profile_fav_dir, profile_out_dir, valid_profile_name
 
 
 def read_png_meta(path: str) -> dict[str, str]:
@@ -33,14 +33,14 @@ def safe_name(name: str) -> bool:
         and "/" not in name and "\\" not in name
 
 
-def resolve_output(name: str) -> tuple[str, bool] | None:
-    """Return ``(absolute_path, is_fav)`` or ``None`` if the file isn't there."""
-    if not safe_name(name):
+def resolve_output(profile: str, name: str) -> tuple[str, bool] | None:
+    """Return ``(absolute_path, is_fav)`` within ``profile`` or ``None``."""
+    if not valid_profile_name(profile) or not safe_name(name):
         return None
-    main = os.path.join(OUT_DIR, name)
+    main = os.path.join(profile_out_dir(profile), name)
     if os.path.isfile(main):
         return (main, False)
-    fav = os.path.join(FAV_DIR, name)
+    fav = os.path.join(profile_fav_dir(profile), name)
     if os.path.isfile(fav):
         return (fav, True)
     return None
@@ -70,14 +70,17 @@ def _scan_dir(directory: str, *, is_fav: bool) -> list[dict[str, Any]]:
     return out
 
 
-def list_outputs(tab: str = "all", page: int = 1, per_page: int = 60) -> dict[str, Any]:
-    """Return one paginated page of outputs, newest first."""
+def list_outputs(profile: str, tab: str = "all",
+                 page: int = 1, per_page: int = 60) -> dict[str, Any]:
+    """Return one paginated page of a profile's outputs, newest first."""
     per_page = max(1, min(per_page, 200))
     page = max(1, page)
+    main_dir = profile_out_dir(profile)
+    fav_dir = profile_fav_dir(profile)
     if tab == "favs":
-        entries = _scan_dir(FAV_DIR, is_fav=True)
+        entries = _scan_dir(fav_dir, is_fav=True)
     else:
-        entries = _scan_dir(OUT_DIR, is_fav=False) + _scan_dir(FAV_DIR, is_fav=True)
+        entries = _scan_dir(main_dir, is_fav=False) + _scan_dir(fav_dir, is_fav=True)
     entries.sort(key=lambda e: e["mtime"], reverse=True)
     total = len(entries)
     start = (page - 1) * per_page

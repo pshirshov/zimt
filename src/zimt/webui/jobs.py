@@ -13,10 +13,10 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
-from typing import Any
 
 import random as _random
 
+from ..backend import Backend
 from ..dynamics import DynamicsSyntaxError, expand, has_dynamics
 from ..generate import CancelledByUser, UninstalledLoraError, generate
 from ..generate import GenConfig
@@ -26,7 +26,7 @@ from .state import CANCEL_EVENTS, EXECUTOR, Job, PIPE_LOCK, STATE
 from .ws import broadcast, emit_job, emit_log
 
 
-def _run_generate_sync(job: Job, pipe: Any, g: GenConfig,
+def _run_generate_sync(job: Job, backend: Backend, g: GenConfig,
                        raw_prompt: str, seed: int, raw: bool,
                        loop: asyncio.AbstractEventLoop,
                        command_line: str, out_dir: str) -> str:
@@ -42,7 +42,7 @@ def _run_generate_sync(job: Job, pipe: Any, g: GenConfig,
         asyncio.run_coroutine_threadsafe(emit_job(job), loop)
 
     return generate(
-        pipe, g, raw_prompt, seed, raw=raw, on_step=_on_step,
+        backend, g, raw_prompt, seed, raw=raw, on_step=_on_step,
         command_line=command_line, out_dir=out_dir,
     )
 
@@ -81,8 +81,8 @@ async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool,
             await emit_job(job)
             return
 
-        pipe = STATE.pipe
-        if pipe is None:
+        backend = STATE.backend
+        if backend is None:
             job.status = "error"
             job.error = "no model loaded"
             job.ts_done = datetime.now().timestamp()
@@ -108,7 +108,7 @@ async def run_job(job: Job, raw_prompt: str, seed: int, raw: bool,
             loop = asyncio.get_running_loop()
             path = await loop.run_in_executor(
                 EXECUTOR, _run_generate_sync,
-                job, pipe, g, raw_prompt, seed, raw, loop, command_line, out_dir,
+                job, backend, g, raw_prompt, seed, raw, loop, command_line, out_dir,
             )
         except CancelledByUser:
             job.status = "canceled"

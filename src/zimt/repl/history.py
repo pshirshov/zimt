@@ -89,6 +89,30 @@ def _resolution_options(tokens: list[str], text: str) -> list[str]:
     return [r for r in sorted(seen) if r.startswith(text)]
 
 
+def _aspect_options(tokens: list[str], text: str) -> list[str]:
+    """Aspect ratios advertised by the remote model in context (union of all
+    remote models when no /model token is present)."""
+    model = _model_for_context(tokens)
+    specs = ([MODELS[model]] if model is not None and MODELS[model].remote
+             else [s for s in MODELS.values() if s.remote is not None])
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.remote is not None:
+            seen.update(spec.remote.aspect_ratios)
+    return [r for r in sorted(seen) if r.startswith(text)]
+
+
+def _quality_options(tokens: list[str], text: str) -> list[str]:
+    model = _model_for_context(tokens)
+    specs = ([MODELS[model]] if model is not None and MODELS[model].remote
+             else [s for s in MODELS.values() if s.remote is not None])
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.remote is not None:
+            seen.update(spec.remote.resolutions)
+    return [r for r in sorted(seen) if r.startswith(text)]
+
+
 def _completion_options(line: str, begidx: int, text: str) -> list[str]:
     prefix = line[:begidx]
     tokens = prefix.split()
@@ -102,6 +126,10 @@ def _completion_options(line: str, begidx: int, text: str) -> list[str]:
         return _sampler_options(tokens, text)
     if prev == "/res":
         return _resolution_options(tokens, text)
+    if prev == "/aspect":
+        return _aspect_options(tokens, text)
+    if prev == "/quality":
+        return _quality_options(tokens, text)
     if prev == "/lora":
         return _lora_options(tokens, text)
     if prev == "/mem":

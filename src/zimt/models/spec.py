@@ -17,7 +17,15 @@ from ..buckets import Resolution, SDXL_BUCKETS
 from ..memory import MemStrategy
 from ..samplers import SDXL_SAMPLERS, SamplerEntry
 
-Family = Literal["sdxl", "zimage", "flux", "flux2"]
+Family = Literal["sdxl", "zimage", "flux", "flux2", "remote"]
+"""Backend family.
+
+The first four are local diffusers pipelines (see ``LocalBackend``). ``remote``
+is a hosted image API (see ``RemoteBackend`` + :class:`RemoteImageConfig`):
+its pixel-space knobs (steps, cfg, sampler, seed, negative, clip_skip, LoRA)
+have no meaning, and it carries its own ``aspect_ratio`` / ``resolution``
+controls instead.
+"""
 
 # LoRA application differs by family because of how the transformer loads:
 #
@@ -32,6 +40,32 @@ LIVE_LORA_FAMILIES: frozenset[str] = frozenset({"sdxl", "zimage"})
 FUSE_LORA_FAMILIES: frozenset[str] = frozenset({"flux", "flux2"})
 # Any family that can apply LoRAs at all (either mechanism).
 LORA_FAMILIES: frozenset[str] = LIVE_LORA_FAMILIES | FUSE_LORA_FAMILIES
+
+
+@dataclass
+class RemoteImageConfig:
+    """Capability + endpoint descriptor for a hosted (``family="remote"``)
+    image-generation model.
+
+    The local-pipeline knobs on :class:`ModelSpec` (samplers, resolution
+    buckets, steps, cfg) are meaningless for a REST image API, so a remote
+    spec leaves those empty and carries its real controls here instead.
+
+    ``api_model`` is the exact model id sent in the request body — by design
+    it equals the registry key the user types after ``/model`` (pass-through
+    naming). ``aspect_ratios`` / ``resolutions`` are the discrete option sets
+    the ``/aspect`` and ``/quality`` commands validate against.
+    """
+
+    api_model: str
+    aspect_ratios: tuple[str, ...]
+    default_aspect_ratio: str
+    resolutions: tuple[str, ...]
+    default_resolution: str
+    max_n: int = 10
+    price_per_image: str = ""
+    """Free-form price label from the provider's model listing, surfaced in
+    the description. Empty when the listing didn't include it."""
 
 
 @dataclass
@@ -101,13 +135,19 @@ class ModelSpec:
     tokenize_report: Callable[[Any, str], None] = field(default=lambda _p, _t: None)
     """``tokenize_report(pipe, text)`` — prints to stdout."""
 
+    remote: "RemoteImageConfig | None" = None
+    """Set iff ``family == "remote"``. Carries the hosted-API endpoint model
+    id and its option sets; ``None`` for every local pipeline."""
+
     @property
     def default_h(self) -> int:
-        return self.resolutions[0][1]
+        # Remote specs have no pixel buckets — height is governed by
+        # aspect_ratio + resolution tier on the API side.
+        return self.resolutions[0][1] if self.resolutions else 0
 
     @property
     def default_w(self) -> int:
-        return self.resolutions[0][0]
+        return self.resolutions[0][0] if self.resolutions else 0
 
 
 @dataclass

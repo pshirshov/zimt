@@ -32,6 +32,8 @@
     "/steps": {n: 1, cls: "hl-num"},
     "/seed": {n: 1, cls: "hl-num"},
     "/clip_skip": {n: 1, cls: "hl-num"},
+    "/aspect": {n: 1, cls: "hl-flag"},
+    "/quality": {n: 1, cls: "hl-flag"},
     "/res": {n: 1, cls: "hl-num"},
     "/size": {n: 2, cls: "hl-num"},
     "/many": {n: 1, cls: "hl-num"},

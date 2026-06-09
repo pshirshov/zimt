@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from ..generate import GenConfig
+from ..backend import Backend
 from ..memory import DEFAULT as DEFAULT_MEM, MemStrategy
 from ..models.loras import LORAS
 from ..models.registry import MODELS
@@ -95,19 +96,19 @@ class Job:
 @dataclass
 class AppState:
     """Per-process state — singleton :data:`STATE` below."""
-    pipe: Any | None = None
+    backend: Backend | None = None
     g: GenConfig | None = None
     loading_model: str | None = None
     # Memory placement strategy applied to the next model load. Set via
     # the `/mem` command in /api/exec; the loader threads it through to
-    # ``load_spec``. Defaults to ``off`` (eager `.to(device)`).
+    # ``load_spec``. Defaults to ``off`` (eager `.to(device)``).
     mem: MemStrategy = DEFAULT_MEM
     jobs: dict[str, Job] = field(default_factory=dict)
     clients: set[WebSocket] = field(default_factory=set)
 
     def state_dict(self) -> dict[str, Any]:
         return {
-            "loaded": self.pipe is not None,
+            "loaded": self.backend is not None,
             "model": self.g.spec.name if self.g else None,
             "loading_model": self.loading_model,
             "models": [
@@ -123,7 +124,17 @@ class AppState:
                  "resolutions": [
                      {"w": w, "h": h, "label": label}
                      for w, h, label in m.resolutions
-                 ]}
+                 ],
+                 # Hosted models advertise their option sets here instead of
+                 # samplers/resolutions; null for every local model.
+                 "remote": ({
+                     "api_model": m.remote.api_model,
+                     "aspect_ratios": list(m.remote.aspect_ratios),
+                     "default_aspect_ratio": m.remote.default_aspect_ratio,
+                     "resolutions": list(m.remote.resolutions),
+                     "default_resolution": m.remote.default_resolution,
+                     "max_n": m.remote.max_n,
+                 } if m.remote is not None else None)}
                 for n, m in MODELS.items()
             ],
             "loras": [
@@ -148,6 +159,10 @@ class AppState:
                     [{"name": n, "weight": w} for n, w in self.g.lora_stack]
                     if self.g else []
                 ),
+                # Remote-only knobs (null/empty for local models).
+                "is_remote": (self.g.spec.remote is not None) if self.g else None,
+                "aspect_ratio": self.g.aspect_ratio if self.g else None,
+                "resolution_tier": self.g.resolution_tier if self.g else None,
                 "mem_mode": self.mem.mode,
                 "mem_max_size": self.mem.max_size,
             },

@@ -21,6 +21,10 @@ COMMAND_ARITY: dict[str, Arity] = {
     "/model": 1, "/cfg": 1, "/steps": 1, "/seed": 1, "/res": 1,
     "/clip_skip": 1,
     "/sampler": 1,
+    # Remote-model controls (hosted image APIs): aspect ratio + resolution
+    # tier. No effect on local diffusers models.
+    "/aspect": 1,
+    "/quality": 1,
     "/size": 2,
     "/raw": 0,
     "/many": "MANY",
@@ -34,6 +38,13 @@ COMMAND_ARITY: dict[str, Arity] = {
     # other commands on one line still parses cleanly.
     "/mem": "GREEDY",
 }
+
+# Settings commands that drive local-pipeline knobs and have no analogue in a
+# hosted image API. Both surfaces short-circuit these with a note when the
+# active model is remote (see ``_apply_setting`` / ``_exec_setting``).
+REMOTE_IGNORED_SETTINGS: frozenset[str] = frozenset({
+    "/cfg", "/steps", "/size", "/res", "/sampler", "/clip_skip", "/negprompt",
+})
 
 KNOWN_COMMANDS: frozenset[str] = frozenset(COMMAND_ARITY)
 

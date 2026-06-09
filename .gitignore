@@ -1,3 +1,5 @@
+docs/
+*-token.txt
 .claude/
 result
 
@@ -24,3 +26,4 @@ docs/drafts/
 *.swp
 .vscode/
 .idea/
+.codegraph/

@@ -168,6 +168,17 @@ function fmtState(s) {
   if (!s.loaded) return "no model loaded";
   const st = s.settings;
   const model = s.models.find(m => m.name === s.model);
+  // Remote (hosted-API) models expose aspect_ratio + resolution tier rather
+  // than the diffusers knobs — show those instead of dormant 0/0 fields.
+  if (st.is_remote) {
+    const rc = model?.remote;
+    const lines = [
+      `model: ${s.model}  (remote)`,
+      `aspect:  ${st.aspect_ratio ?? rc?.default_aspect_ratio ?? "?"}`,
+      `quality: ${st.resolution_tier ?? rc?.default_resolution ?? "?"}`,
+    ];
+    return lines.join("\n");
+  }
   const presets = model?.resolutions ?? [];
   const preset = presets.find(p => p.w === st.width && p.h === st.height);
   const sz = `${st.width}x${st.height}` + (preset ? `  [${preset.label}]` : "  [custom]");

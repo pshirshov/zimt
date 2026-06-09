@@ -30,7 +30,7 @@ from ..memory import MemArgError, parse_mem_args
 from ..models.registry import MODELS
 from ..paths import DEFAULT_PROFILE, profile_fav_dir, profile_out_dir, valid_profile_name
 from ..models.spec import FUSE_LORA_FAMILIES
-from ..repl.commands import parse_commands
+from ..repl.commands import REMOTE_IGNORED_SETTINGS, parse_commands
 from .jobs import run_job
 from .loader import ModelLoadError, load_model
 from .state import CANCEL_EVENTS, Job, STATE, register_task
@@ -56,6 +56,11 @@ _MAX_PIXELS_BY_FAMILY = {
     "zimage": 2048 * 2048,
     "flux": 2048 * 2048,
     "flux2": 2048 * 2048,
+    # Remote models have no client-side pixel budget — sizing is governed by
+    # the API's aspect_ratio + resolution tier. The /size and /res commands are
+    # rejected for remote models before _validate_size runs, but key it anyway
+    # so a stray call can't KeyError.
+    "remote": 2048 * 2048,
 }
 
 
@@ -79,7 +84,7 @@ async def _need_pipe(action: str, log: list[str]) -> bool:
         log.append(msg)
         await emit_log(msg, level="error")
         return False
-    if STATE.g is None or STATE.pipe is None:
+    if STATE.g is None or STATE.backend is None:
         msg = f"{action}: no model loaded"
         log.append(msg)
         await emit_log(msg, level="error")
@@ -94,6 +99,12 @@ async def _exec_setting(
     if STATE.g is None:
         return
     g = STATE.g
+    if g.spec.remote is not None and cmd in REMOTE_IGNORED_SETTINGS:
+        msg = (f"{cmd} has no effect for remote model {g.spec.name}; "
+               f"use /aspect and /quality")
+        log.append(msg)
+        await emit_log(msg)
+        return
     if cmd == "/cfg":
         try:
             cfg = float(args[0])
@@ -176,15 +187,47 @@ async def _exec_setting(
             g.negative_prompt = text
             log.append(f"negprompt = {text!r}")
         await emit_state()
+    elif cmd == "/aspect":
+        if g.spec.remote is None:
+            log.append("/aspect: only applies to remote models")
+            return
+        ratios = g.spec.remote.aspect_ratios
+        val = (args[0] if args else "").strip()
+        if not val:
+            log.append(f"aspect = {g.aspect_ratio or g.spec.remote.default_aspect_ratio} "
+                       f"(available: {', '.join(ratios)})")
+            return
+        if val not in ratios:
+            log.append(f"/aspect: unknown {val!r}; available: {', '.join(ratios)}")
+            return
+        g.aspect_ratio = val
+        log.append(f"aspect = {val}")
+        await emit_state()
+    elif cmd == "/quality":
+        if g.spec.remote is None:
+            log.append("/quality: only applies to remote models")
+            return
+        tiers = g.spec.remote.resolutions
+        val = (args[0] if args else "").strip()
+        if not val:
+            log.append(f"quality = {g.resolution_tier or g.spec.remote.default_resolution} "
+                       f"(available: {', '.join(tiers)})")
+            return
+        if val not in tiers:
+            log.append(f"/quality: unknown {val!r}; available: {', '.join(tiers)}")
+            return
+        g.resolution_tier = val
+        log.append(f"quality = {val}")
+        await emit_state()
 
 
 def _tokenize_text(text: str) -> str:
     """Capture the tokenize-report output and strip ANSI for web display."""
-    assert STATE.pipe is not None and STATE.g is not None
+    assert STATE.backend is not None and STATE.g is not None
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         try:
-            STATE.g.spec.tokenize_report(STATE.pipe, text)
+            STATE.backend.tokenize_report(text)
         except Exception as e:
             print(f"error: {e}", file=buf)
     return _ANSI_RE.sub("", buf.getvalue().rstrip())
@@ -326,7 +369,7 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
             # effect now (matches the REPL's auto-reload behaviour). With
             # no model loaded, the new strategy is sticky and applies on
             # the next /model load.
-            if STATE.pipe is not None and STATE.g is not None:
+            if STATE.backend is not None and STATE.g is not None:
                 current = STATE.g.spec.name
                 await emit_log(
                     f"reloading {current} with mem={STATE.mem.describe()}"
@@ -375,7 +418,7 @@ async def api_exec(body: ExecBody) -> dict[str, Any]:
         log.append(msg)
         await emit_log(msg, level="error")
         return {"job_ids": job_ids, "log": log}
-    if STATE.pipe is None or STATE.g is None:
+    if STATE.backend is None or STATE.g is None:
         msg = "generate: no model loaded"
         log.append(msg)
         await emit_log(msg, level="error")

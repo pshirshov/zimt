@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import random
-from typing import Any
 
 import torch
 
 from ..buckets import parse_res
 from ..dynamics import DynamicsSyntaxError, validate as validate_dynamics
-from ..generate import GenConfig, generate, load_spec, unload
+from ..backend import Backend
+from ..generate import GenConfig, generate, load_spec
 from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
 from ..memory import DEFAULT as DEFAULT_MEM, MemArgError, MemStrategy, parse_mem_args
 from ..models.custom import reload_custom_into_registries
 from ..models.registry import MODELS
 from ..models.spec import FUSE_LORA_FAMILIES
 from ..preview import IN_TMUX, detect_protocol, preview
-from .commands import parse_commands
+from .commands import REMOTE_IGNORED_SETTINGS, parse_commands
 from .history import init_readline
 
 
@@ -33,6 +33,8 @@ def _help() -> None:
     print("  /res [N | WxH]       pick a model-preset resolution by index or set explicitly")
     print("  /sampler <name>      switch scheduler (model-specific; tab-complete)")
     print("  /clip_skip N         SDXL only — skip top N CLIP layers (0=off, 2=Pony default)")
+    print("  /aspect <ratio>      remote only — set API aspect ratio (e.g. 16:9; tab-complete)")
+    print("  /quality <tier>      remote only — set API resolution tier (e.g. 1k, 2k)")
     print("  /model [name]        switch model; bare lists available")
     print("  /lora <name>         add/update one LoRA: name, name:0.8, -name, -; repeat for stacking")
     print("  /tokenize <text>     show per-encoder tokenization heuristics")
@@ -78,27 +80,28 @@ def _list_models(current: str) -> None:
         print(f" {marker} {name:<16}  {m.description}")
 
 
-def _require_pipe(pipe: Any) -> bool:
-    if pipe is None:
+def _require_backend(backend: Backend | None) -> bool:
+    if backend is None:
         print("no model loaded — use `/model <name>` first (try /model<TAB>)")
         return False
     return True
 
 
 def _new_config(name: str) -> GenConfig:
-    spec = MODELS[name]
-    return GenConfig(
-        spec=spec, cfg=spec.default_cfg,
-        negative_prompt=spec.default_negative,
-        height=spec.default_h, width=spec.default_w,
-        steps=spec.default_steps,
-    )
+    return GenConfig.from_spec(MODELS[name])
 
 
 def repl_main() -> int:
     report = reload_custom_into_registries()
     for err in report["errors"]:
         print(f"custom descriptor error: {err}")
+    # Discover hosted (remote-API) image models. No-op without XAI_API_KEY.
+    from ..models.remote import merge_remote_into_registry
+    remote_report = merge_remote_into_registry()
+    for err in remote_report["errors"]:
+        print(f"remote model discovery: {err}")
+    if remote_report["added"]:
+        print(f"remote models available: {remote_report['added']}")
     init_readline()
     print(f"torch={torch.__version__}  xpu={torch.xpu.is_available() if hasattr(torch, 'xpu') else False}")
     if hasattr(torch, "xpu") and torch.xpu.is_available():
@@ -106,7 +109,7 @@ def repl_main() -> int:
     elif torch.cuda.is_available():
         print(f"cuda[0]={torch.cuda.get_device_name(0)}")
 
-    pipe: Any = None
+    backend: Backend | None = None
     g: GenConfig | None = None
     mem: MemStrategy = DEFAULT_MEM
 
@@ -159,11 +162,11 @@ def repl_main() -> int:
                 if g is not None and g.spec.name == name:
                     print(f"{name} is already loaded")
                     continue
-                if pipe is not None:
+                if backend is not None:
                     print(f"unloading {g.spec.name} ...")  # type: ignore[union-attr]
-                    unload(pipe)
-                    pipe = None
-                pipe = load_spec(MODELS[name], mem)
+                    backend.unload()
+                    backend = None
+                backend = load_spec(MODELS[name], mem)
                 g = _new_config(name)
                 _print_state(g)
             elif cmd == "/seed":
@@ -209,19 +212,19 @@ def repl_main() -> int:
                     continue
                 mem = new_mem
                 print(f"mem = {mem.describe()}")
-                if pipe is not None and g is not None:
+                if backend is not None and g is not None:
                     name = g.spec.name
                     print(f"reloading {name} with new memory strategy ...")
-                    unload(pipe)
-                    pipe = None
+                    backend.unload()
+                    backend = None
                     try:
                         # Preserve the active stack (re-fuses for fp8 families).
-                        pipe = load_spec(MODELS[name], mem, tuple(g.lora_stack))
+                        backend = load_spec(MODELS[name], mem, tuple(g.lora_stack))
                     except Exception as e:
                         print(f"reload failed: {e}")
                         g = None
             elif cmd == "/lora":
-                if not _require_pipe(pipe) or g is None:
+                if not _require_backend(backend) or g is None:
                     continue
                 if not args:
                     print(f"active loras: {format_stack(g.lora_stack)}")
@@ -239,10 +242,10 @@ def repl_main() -> int:
                 if (g.spec.family in FUSE_LORA_FAMILIES
                         and tuple(new_stack) != tuple(g.lora_stack)):
                     print(f"reloading {g.spec.name} to fuse LoRA changes (fp8) ...")
-                    unload(pipe)
-                    pipe = None
+                    backend.unload()
+                    backend = None
                     try:
-                        pipe = load_spec(MODELS[g.spec.name], mem, tuple(new_stack))
+                        backend = load_spec(MODELS[g.spec.name], mem, tuple(new_stack))
                         g.lora_stack = new_stack
                     except Exception as e:
                         print(f"reload failed: {e}")
@@ -250,26 +253,26 @@ def repl_main() -> int:
                 else:
                     g.lora_stack = new_stack
             elif cmd == "/tokenize":
-                if not _require_pipe(pipe) or g is None:
+                if not _require_backend(backend) or g is None:
                     continue
                 text = args[0] if args else ""
                 if not text:
                     print("usage: /tokenize <text>")
                     continue
                 try:
-                    g.spec.tokenize_report(pipe, text)
+                    backend.tokenize_report(text)
                 except Exception as e:
                     print(f"error: {e}")
             else:
-                # remaining settings commands require a loaded pipeline
-                if not _require_pipe(pipe) or g is None:
+                # remaining settings commands require a loaded model
+                if not _require_backend(backend) or g is None:
                     continue
                 _apply_setting(cmd, args, g)
 
         # Second pass: maybe generate.
         if not prompt_text:
             continue
-        if not _require_pipe(pipe) or g is None:
+        if not _require_backend(backend) or g is None:
             continue
         # Catch template syntax errors once, before the /many loop, so a
         # broken `{red|blue` doesn't print N near-identical errors.
@@ -286,7 +289,7 @@ def repl_main() -> int:
                 # recorded in PNG metadata as command_line so the image
                 # can round-trip back to its source line.
                 out = generate(
-                    pipe, g, prompt_text, seed, raw=raw_flag,
+                    backend, g, prompt_text, seed, raw=raw_flag,
                     command_line=line,
                 )
             except Exception as e:
@@ -298,6 +301,10 @@ def repl_main() -> int:
 
 def _apply_setting(cmd: str, args: list[str], g: GenConfig) -> None:
     """Apply a settings-mutating command to ``g``. Returns silently on success."""
+    if g.spec.remote is not None and cmd in REMOTE_IGNORED_SETTINGS:
+        print(f"({cmd} has no effect for remote model {g.spec.name}; "
+              f"use /aspect and /quality)")
+        return
     if cmd == "/cfg":
         try:
             g.cfg = float(args[0])
@@ -357,3 +364,33 @@ def _apply_setting(cmd: str, args: list[str], g: GenConfig) -> None:
             print(f"negprompt = {g.negative_prompt!r}")
         if g.cfg == 0:
             print("(cfg=0 — negprompt is dormant; /cfg <float> to enable)")
+    elif cmd == "/aspect":
+        if g.spec.remote is None:
+            print("/aspect: only applies to remote models")
+            return
+        ratios = g.spec.remote.aspect_ratios
+        val = (args[0] if args else "").strip()
+        if not val:
+            print(f"aspect = {g.aspect_ratio or g.spec.remote.default_aspect_ratio}")
+            print(f"available: {', '.join(ratios)}")
+            return
+        if val not in ratios:
+            print(f"/aspect: unknown {val!r}; available: {', '.join(ratios)}")
+            return
+        g.aspect_ratio = val
+        print(f"aspect = {val}")
+    elif cmd == "/quality":
+        if g.spec.remote is None:
+            print("/quality: only applies to remote models")
+            return
+        tiers = g.spec.remote.resolutions
+        val = (args[0] if args else "").strip()
+        if not val:
+            print(f"quality = {g.resolution_tier or g.spec.remote.default_resolution}")
+            print(f"available: {', '.join(tiers)}")
+            return
+        if val not in tiers:
+            print(f"/quality: unknown {val!r}; available: {', '.join(tiers)}")
+            return
+        g.resolution_tier = val
+        print(f"quality = {val}")

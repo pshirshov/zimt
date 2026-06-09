@@ -16,7 +16,7 @@ import threading
 import uuid
 from datetime import datetime
 
-from ..generate import GenConfig, load_spec, unload
+from ..generate import GenConfig, load_spec
 from ..models.registry import MODELS
 from .downloads import (
     DownloadCanceled, clear_active_download, download_context, set_active_download,
@@ -52,23 +52,15 @@ def _do_load_sync(name: str, loras: tuple[tuple[str, float], ...] | None = None)
         stack is set to ``loras``.
     """
     prev = STATE.g
-    if STATE.pipe is not None:
-        unload(STATE.pipe)
-        STATE.pipe = None
+    if STATE.backend is not None:
+        STATE.backend.unload()
+        STATE.backend = None
     STATE.g = None
     spec = MODELS[name]
-    pipe = load_spec(spec, STATE.mem, tuple(loras or ()))
-    STATE.pipe = pipe
+    backend = load_spec(spec, STATE.mem, tuple(loras or ()))
+    STATE.backend = backend
     if loras is None or prev is None or prev.spec.name != name:
-        STATE.g = GenConfig(
-            spec=spec,
-            cfg=spec.default_cfg,
-            negative_prompt=spec.default_negative,
-            height=spec.default_h,
-            width=spec.default_w,
-            steps=spec.default_steps,
-            lora_stack=list(loras or []),
-        )
+        STATE.g = GenConfig.from_spec(spec, lora_stack=list(loras or []))
     else:
         # Same-model reload: keep the user's tuned settings, swap the stack.
         STATE.g = GenConfig(
@@ -80,6 +72,8 @@ def _do_load_sync(name: str, loras: tuple[tuple[str, float], ...] | None = None)
             steps=prev.steps,
             sampler=prev.sampler,
             clip_skip=prev.clip_skip,
+            aspect_ratio=prev.aspect_ratio,
+            resolution_tier=prev.resolution_tier,
             lora_stack=list(loras),
         )
 
@@ -103,7 +97,7 @@ async def load_model(name: str, *, force: bool = False,
     if name not in MODELS:
         raise ModelLoadError(f"unknown model {name!r}")
     if (not force
-            and STATE.pipe is not None and STATE.g is not None
+            and STATE.backend is not None and STATE.g is not None
             and STATE.g.spec.name == name):
         await emit_log(f"{name} is already loaded")
         return
@@ -152,7 +146,7 @@ async def load_model(name: str, *, force: bool = False,
 
         async with PIPE_LOCK:
             if (not force
-                    and STATE.pipe is not None and STATE.g is not None
+                    and STATE.backend is not None and STATE.g is not None
                     and STATE.g.spec.name == name):
                 await emit_log(f"{name} is already loaded")
                 job.status = "done"
@@ -171,7 +165,7 @@ async def load_model(name: str, *, force: bool = False,
                 # User-initiated cancel — not a failure. Don't raise
                 # ModelLoadError; just leave the pipe unloaded and mark
                 # the job canceled.
-                STATE.pipe = None
+                STATE.backend = None
                 STATE.g = None
                 job.status = "canceled"
                 job.error = "canceled during download"
@@ -181,7 +175,7 @@ async def load_model(name: str, *, force: bool = False,
                 await emit_state()
                 return
             except Exception as e:
-                STATE.pipe = None
+                STATE.backend = None
                 STATE.g = None
                 job.status = "error"
                 job.error = f"{type(e).__name__}: {e}"

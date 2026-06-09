@@ -3,7 +3,8 @@
 
   const COMMANDS = [
     "/help", "/?", "/raw", "/many", "/seed", "/negprompt", "/cfg", "/steps",
-    "/size", "/res", "/sampler", "/clip_skip", "/model", "/lora", "/tokenize",
+    "/size", "/res", "/sampler", "/clip_skip", "/aspect", "/quality",
+    "/model", "/lora", "/tokenize",
     "/mem",
     "/quit", "/exit", "/q",
   ].sort();
@@ -29,6 +30,8 @@
     "/res": "pick a model-preset resolution",
     "/sampler": "switch scheduler",
     "/clip_skip": "SDXL only; skip top N CLIP layers",
+    "/aspect": "remote only; API aspect ratio (e.g. 16:9)",
+    "/quality": "remote only; API resolution tier (1k | 2k)",
     "/model": "load a model",
     "/lora": "add/remove LoRAs (name | name:0.8 | -name | -)",
     "/tokenize": "per-encoder token analysis",
@@ -325,6 +328,20 @@
       const explicit = presets.map((r) => ({ label: `${r.w}x${r.h}`, desc: r.label }));
       return [...orientations, ...explicit]
         .filter((it) => it.label.toLowerCase().startsWith(lower));
+    }
+
+    if (prev === "/aspect") {
+      const model = modelForContext(before, appState);
+      return (model?.remote?.aspect_ratios ?? [])
+        .filter((r) => r.toLowerCase().startsWith(lower))
+        .map((r) => ({ label: r, desc: "" }));
+    }
+
+    if (prev === "/quality") {
+      const model = modelForContext(before, appState);
+      return (model?.remote?.resolutions ?? [])
+        .filter((r) => r.toLowerCase().startsWith(lower))
+        .map((r) => ({ label: r, desc: "" }));
     }
 
     if (prev === "/mem") {

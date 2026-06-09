@@ -36,13 +36,13 @@ def _config_for(name: str) -> GenConfig:
 
 class StateCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self._pipe = STATE.pipe
+        self._backend = STATE.backend
         self._g = STATE.g
         self._loading_model = STATE.loading_model
         self._jobs = dict(STATE.jobs)
         self._cancel_events = dict(CANCEL_EVENTS)
         self._active_job_id = downloads._active_job_id
-        STATE.pipe = None
+        STATE.backend = None
         STATE.g = None
         STATE.loading_model = None
         STATE.jobs.clear()
@@ -59,7 +59,7 @@ class StateCase(unittest.IsolatedAsyncioTestCase):
         setattr(_state_mod.LOADING_LOCK, "_loop", None)
 
     def tearDown(self) -> None:
-        STATE.pipe = self._pipe
+        STATE.backend = self._backend
         STATE.g = self._g
         STATE.loading_model = self._loading_model
         STATE.jobs.clear()
@@ -73,38 +73,38 @@ class LoaderTests(StateCase):
     async def test_failed_load_clears_stale_config_and_same_model_reloads(self) -> None:
         # regression: stale STATE.g previously made same-model reload a no-op
         # after the pipe had been unloaded by a failed model switch.
-        STATE.pipe = object()
+        STATE.backend = object()
         STATE.g = _config_for("z-image-turbo")
 
         def fail_after_unload(_name: str, loras=None) -> None:
-            STATE.pipe = None
+            STATE.backend = None
             raise RuntimeError("simulated load failure")
 
         with patch.object(loader, "_do_load_sync", fail_after_unload):
             with self.assertRaises(loader.ModelLoadError):
                 await loader.load_model("pony-v6-xl")
 
-        self.assertIsNone(STATE.pipe)
+        self.assertIsNone(STATE.backend)
         self.assertIsNone(STATE.g)
 
         calls: list[str] = []
 
         def succeed(name: str, loras=None) -> None:
             calls.append(name)
-            STATE.pipe = object()
+            STATE.backend = object()
             STATE.g = _config_for(name)
 
         with patch.object(loader, "_do_load_sync", succeed):
             await loader.load_model("z-image-turbo")
 
         self.assertEqual(calls, ["z-image-turbo"])
-        self.assertIsNotNone(STATE.pipe)
+        self.assertIsNotNone(STATE.backend)
         self.assertEqual(STATE.g.spec.name if STATE.g else None, "z-image-turbo")
 
 
 class ExecValidationTests(StateCase):
     async def test_invalid_settings_do_not_mutate_loaded_config(self) -> None:
-        STATE.pipe = object()
+        STATE.backend = object()
         STATE.g = _config_for("z-image-turbo")
         before = (STATE.g.cfg, STATE.g.steps, STATE.g.width, STATE.g.height)
 
@@ -121,7 +121,7 @@ class ExecValidationTests(StateCase):
         self.assertIn("/res:", log)
 
     async def test_generation_receives_config_snapshot_from_enqueue_time(self) -> None:
-        STATE.pipe = object()
+        STATE.backend = object()
         STATE.g = _config_for("z-image-turbo")
         captured: list[GenConfig] = []
 
@@ -154,7 +154,7 @@ class ExecValidationTests(StateCase):
 
         def succeed(name: str, loras=None) -> None:
             load_calls.append(name)
-            STATE.pipe = object()
+            STATE.backend = object()
             STATE.g = _config_for(name)
 
         emitted: list[str] = []
@@ -178,7 +178,7 @@ class ExecValidationTests(StateCase):
         )
 
     async def test_generation_rejected_while_model_load_pending(self) -> None:
-        STATE.pipe = object()
+        STATE.backend = object()
         STATE.g = _config_for("z-image-turbo")
         STATE.loading_model = "pony-v6-xl"
 
@@ -188,7 +188,7 @@ class ExecValidationTests(StateCase):
         self.assertIn("generate: model pony-v6-xl is loading", response["log"])
 
     async def test_model_load_waits_for_active_jobs_before_unload(self) -> None:
-        STATE.pipe = object()
+        STATE.backend = object()
         STATE.g = _config_for("z-image-turbo")
         STATE.jobs["queued"] = Job(id="queued", status="queued")
         CANCEL_EVENTS["queued"] = threading.Event()
@@ -196,7 +196,7 @@ class ExecValidationTests(StateCase):
 
         def succeed(name: str, loras=None) -> None:
             load_calls.append(name)
-            STATE.pipe = object()
+            STATE.backend = object()
             STATE.g = _config_for(name)
 
         async def finish_job() -> None:
@@ -230,7 +230,7 @@ class DownloadIdentityTests(StateCase):
 
         def succeed(name: str, loras=None) -> None:
             load_calls.append(name)
-            STATE.pipe = object()
+            STATE.backend = object()
             STATE.g = _config_for(name)
 
         with patch.object(loader, "_do_load_sync", succeed):
@@ -270,7 +270,7 @@ class DownloadOwnershipTests(StateCase):
         def succeed(name: str, loras=None) -> None:
             current = downloads.current_download()
             observed["during_load_owner"] = current["id"] if current is not None else None
-            STATE.pipe = object()
+            STATE.backend = object()
             STATE.g = _config_for(name)
 
         with (
@@ -335,7 +335,7 @@ class DownloadOwnershipTests(StateCase):
             observed["load_progress_owner"] = (
                 load_jobs[0].progress_owner if load_jobs else None
             )
-            STATE.pipe = object()
+            STATE.backend = object()
             STATE.g = _config_for(name)
 
         with (
@@ -869,12 +869,14 @@ class UninstalledLoraGuardTests(StateCase):
                         f"expected 'not installed' message in log, got {log!r}")
 
     async def test_run_job_reports_uninstalled_lora_error_with_clean_message(self) -> None:
-        STATE.pipe = MagicMock()
-        STATE.pipe._zimt_loras_loaded = set()
+        from zimt.backend import LocalBackend
+        pipe = MagicMock()
+        pipe._zimt_loras_loaded = set()
         STATE.g = self._sdxl_config()
         STATE.g.lora_stack = [("pixel-art-xl", 0.8)]
         # Short-circuit _ensure_sampler (would otherwise touch scheduler.config).
-        STATE.pipe._zimt_sampler = STATE.g.spec.default_sampler
+        pipe._zimt_sampler = STATE.g.spec.default_sampler
+        STATE.backend = LocalBackend(pipe, STATE.g.spec)
 
         job = Job(id="gen-uninstalled", kind="generate", status="queued")
         STATE.jobs[job.id] = job
@@ -890,8 +892,8 @@ class UninstalledLoraGuardTests(StateCase):
         # Must be the plain message, not the repr-formatted one.
         self.assertFalse(job.error.startswith("UninstalledLoraError("),
                          f"error should be str(e), not repr(e): {job.error!r}")
-        STATE.pipe.load_lora_weights.assert_not_called()
-        STATE.pipe.assert_not_called()  # the pipeline itself was never invoked
+        pipe.load_lora_weights.assert_not_called()
+        pipe.assert_not_called()  # the pipeline itself was never invoked
 
 
 class RegistryTests(unittest.TestCase):
@@ -1020,7 +1022,7 @@ class ConcurrentLoadGateTests(StateCase):
         STATE.loading_model = "ascii-art"
 
         def succeed(name: str, loras=None) -> None:
-            STATE.pipe = object()
+            STATE.backend = object()
             STATE.g = _config_for(name)
 
         with (
@@ -1089,7 +1091,7 @@ class LoraSnapshotTests(StateCase):
     async def test_generation_snapshot_isolates_lora_stack_from_post_enqueue_mutation(self) -> None:
         # PR-07-D08: dataclasses.replace is shallow; lora_stack must be
         # deep-copied or post-enqueue /lora mutations leak into the job.
-        STATE.pipe = object()
+        STATE.backend = object()
         STATE.g = _config_for("pony-v6-xl")
         STATE.g.lora_stack = [("pixel-art-xl", 1.0)]
         captured: list[GenConfig] = []
@@ -1115,7 +1117,7 @@ class JobErrorFormattingTests(StateCase):
     async def test_generic_pipeline_exception_renders_as_class_colon_message(self) -> None:
         # PR-07-D09: job.error should be "ValueError: foo" rather than
         # "ValueError('foo')" so the UI prints a readable message.
-        STATE.pipe = MagicMock()
+        STATE.backend = MagicMock()
         STATE.g = _config_for("z-image-turbo")
 
         job = Job(id="gen-fail", kind="generate", status="queued")
@@ -1362,7 +1364,7 @@ class NonSdxlLoraTests(unittest.TestCase):
 
         g = _config_for("flux-1-dev")  # family="flux" — FUSE
         g.lora_stack = [("flux-uncensored", 0.8)]
-        info = _pnginfo(g, "prompt", "prompt", "prompt", 42)
+        info = _pnginfo(g, "prompt", "prompt", "prompt", 42, {})
         keywords: set[str] = set()
         for chunk_type, data, *_ in info.chunks:
             if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
@@ -1380,7 +1382,7 @@ class NonSdxlLoraTests(unittest.TestCase):
 
         g = _config_for("pony-v6-xl")  # family="sdxl"
         g.lora_stack = [("pixel-art-xl", 0.8)]
-        info = _pnginfo(g, "prompt", "prompt", "prompt", 42)
+        info = _pnginfo(g, "prompt", "prompt", "prompt", 42, {})
         keywords: set[str] = set()
         for chunk_type, data, *_ in info.chunks:
             if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
@@ -1397,7 +1399,7 @@ class NonSdxlLoraTests(unittest.TestCase):
 
         g = _config_for("pony-v6-xl")
         line = "/model pony-v6-xl /cfg 5 cute ${color=red|blue} cat"
-        info = _pnginfo(g, "prompt", "prompt", "prompt", 42, line)
+        info = _pnginfo(g, "prompt", "prompt", "prompt", 42, {}, line)
         chunks_by_key: dict[str, str] = {}
         for chunk_type, data, *_ in info.chunks:
             if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
@@ -1414,7 +1416,7 @@ class NonSdxlLoraTests(unittest.TestCase):
         from zimt.generate import _pnginfo
 
         g = _config_for("pony-v6-xl")
-        info = _pnginfo(g, "prompt", "prompt", "prompt", 42)
+        info = _pnginfo(g, "prompt", "prompt", "prompt", 42, {})
         keywords: set[str] = set()
         for chunk_type, data, *_ in info.chunks:
             if chunk_type in (b"tEXt", b"zTXt", b"iTXt"):
@@ -1444,17 +1446,17 @@ class ModelUnloadTests(StateCase):
 
     async def test_model_unload_rpc_clears_pipe_and_g(self) -> None:
         from zimt.webui.app import _rpc_model_unload
-        STATE.pipe = MagicMock()
+        STATE.backend = MagicMock()
         STATE.g = _config_for("z-image-turbo")
         with patch("zimt.generate.unload"):
             result = await _rpc_model_unload({})
         self.assertEqual(result, {"ok": True})
-        self.assertIsNone(STATE.pipe)
+        self.assertIsNone(STATE.backend)
         self.assertIsNone(STATE.g)
 
     async def test_model_unload_rpc_is_noop_when_no_model_loaded(self) -> None:
         from zimt.webui.app import _rpc_model_unload
-        STATE.pipe = None
+        STATE.backend = None
         STATE.g = None
         result = await _rpc_model_unload({})
         self.assertEqual(result.get("ok"), True)
@@ -1463,7 +1465,7 @@ class ModelUnloadTests(StateCase):
     async def test_model_unload_rpc_refuses_with_in_flight_generation(self) -> None:
         from zimt.webui.app import _rpc_model_unload
         from zimt.webui.state import Job
-        STATE.pipe = MagicMock()
+        STATE.backend = MagicMock()
         STATE.g = _config_for("z-image-turbo")
         gen_job = Job(id="g1", kind="generate", status="running")
         STATE.jobs[gen_job.id] = gen_job
@@ -1471,7 +1473,7 @@ class ModelUnloadTests(StateCase):
             await _rpc_model_unload({})
         self.assertIn("cannot unload", str(ctx.exception).lower())
         # Pipe and config must NOT have been cleared.
-        self.assertIsNotNone(STATE.pipe)
+        self.assertIsNotNone(STATE.backend)
         self.assertIsNotNone(STATE.g)
 
 

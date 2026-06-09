@@ -202,6 +202,14 @@ async def _on_startup() -> None:
             print(f"zimt: custom descriptor error: {err}")
     if report["bases"] or report["loras"]:
         print(f"zimt: loaded custom bases={report['bases']} loras={report['loras']}")
+    # Discover hosted (remote-API) image models. No-op when XAI_API_KEY is
+    # unset; logs the provider's reason when the listing call fails.
+    from ..models.remote import merge_remote_into_registry
+    remote_report = merge_remote_into_registry()
+    for err in remote_report["errors"]:
+        print(f"zimt: remote model discovery: {err}")
+    if remote_report["added"]:
+        print(f"zimt: remote models available: {remote_report['added']}")
     register_task(_gpu_stats_loop())
 
 
@@ -268,24 +276,22 @@ async def _rpc_model_unload(_params: dict[str, Any]) -> dict[str, Any]:
     can't race a concurrent generation; refuses if a generation is
     in flight (the user must cancel-all first).
     """
-    if STATE.pipe is None:
+    if STATE.backend is None:
         return {"ok": True, "reason": "no model loaded"}
     if any(j.status in ("queued", "running") and j.kind == "generate"
            for j in STATE.jobs.values()):
         raise rpc_error("cannot unload while generations are in flight; cancel them first")
     async with PIPE_LOCK:
-        if STATE.pipe is None:
+        if STATE.backend is None:
             return {"ok": True, "reason": "no model loaded"}
-        from ..generate import unload as _unload_pipe
-        # Null STATE first so a failed unload doesn't leave the UI
-        # claiming a model is loaded. unload() walks the wrapper and
-        # nulls its submodule slots in place, so VRAM is released even
-        # though we still hold the wrapper here for the call.
-        pipe_to_release = STATE.pipe
-        STATE.pipe = None
+        # Null STATE first so a failed unload doesn't leave the UI claiming a
+        # model is loaded. backend.unload() releases device memory (local) or
+        # closes the HTTP client (remote) and nulls its own internal refs.
+        backend_to_release = STATE.backend
+        STATE.backend = None
         STATE.g = None
-        _unload_pipe(pipe_to_release)
-        pipe_to_release = None  # noqa: F841 — drop final wrapper ref
+        backend_to_release.unload()
+        backend_to_release = None  # noqa: F841 — drop final wrapper ref
     await emit_state()
     await broadcast({"type": "model_unloaded"})
     return {"ok": True}

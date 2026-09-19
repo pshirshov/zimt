@@ -46,7 +46,7 @@ for m in matches:
     url = m.group("url")
     print(f"  fetching {url}")
     out = subprocess.run(
-        ["nix-prefetch-url", "--type", "sha256", "--unpack=false", url],
+        ["nix-prefetch-url", "--type", "sha256", url],
         check=True, capture_output=True, text=True,
     )
     sha_b32 = out.stdout.strip()
@@ -54,13 +54,17 @@ for m in matches:
         ["nix", "hash", "to-sri", "--type", "sha256", sha_b32],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
-    # Replace the *first* remaining lib.fakeHash; we mutate the file as we go.
     cur = open(path).read()
-    cur = cur.replace("lib.fakeHash", f'"{sri}"', 1)
+    placeholder = re.compile(
+        rf'(url\s*=\s*"{re.escape(url)}"\s*;[^}}]*?hash\s*=\s*)lib\.fakeHash'
+    )
+    cur, count = placeholder.subn(rf'\1"{sri}"', cur, count=1)
+    if count != 1:
+        raise RuntimeError(f"expected one hash placeholder for {url}, found {count}")
     open(path, "w").write(cur)
     print(f"    -> {sri}")
 PY
 done
 
 echo
-echo "all hashes seeded. Re-run `nix build` to confirm."
+echo 'all hashes seeded. Re-run `nix build` to confirm.'

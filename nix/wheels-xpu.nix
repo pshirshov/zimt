@@ -63,127 +63,132 @@ let
     # ---- Intel oneAPI / SYCL runtime ----
     {
       name = "intel_cmplr_lib_rt";
-      url = "https://files.pythonhosted.org/packages/1b/d7/ffb7e58ac260737b5076e2738ce198468a4efb3ba1885bced038801c387a/intel_cmplr_lib_rt-2025.3.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-xBPvwbLd2Kh56VGLy8N1VBuLYzlRsoJWhFcdgzrqJq0=";
+      url = "https://files.pythonhosted.org/packages/5b/f4/c59236000ce3a470bfcae4053ad96e97c3c9febf2b38e5487046b7f4505f/intel_cmplr_lib_rt-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-jgAqr4l0HeO0JL2tUc5g6tIcyPTe6XD8y6iO48hFaS0=";
     }
     {
       name = "intel_cmplr_lib_ur";
-      url = "https://files.pythonhosted.org/packages/49/7e/bc668ee301350964b7be980db7d527a54a61b89a749d09bb430b4598ed3b/intel_cmplr_lib_ur-2025.3.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-F1zbD7ylw+8NsXbxy9i48sNtM+t3TPHQz6BAT3SN9jQ=";
+      url = "https://files.pythonhosted.org/packages/8e/06/da0fcd62ee4672489ede80f322eec61b48a38695b0a5072d6d1075b37197/intel_cmplr_lib_ur-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-dLZKzoJ3sDGqNjKNyPh/f5WabKTaW2jGmSPTcoPgFmQ=";
     }
     {
       name = "intel_cmplr_lic_rt";
-      url = "https://files.pythonhosted.org/packages/c1/27/bbadf924bf134143895fc197701951d9d28c77bd1cfbabd5e1dfb9b90b8b/intel_cmplr_lic_rt-2025.3.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-hzD7HchHQKSVYDQDUxuSRaxH0tNWOoU6exoN/jqBsrs=";
+      url = "https://files.pythonhosted.org/packages/2a/9c/cfdfb3429b32fbd2bed7a9bcce2989efa329ca1b87b70e03bc9170650512/intel_cmplr_lic_rt-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-7J98SVvaj10mBEIFaAjudc9MGhRZEM6Zng6JZNeM4bo=";
     }
     {
       name = "intel_opencl_rt";
-      url = "https://files.pythonhosted.org/packages/40/6b/51459a9a6ac585ab8ca1accc58a580a23b91c5272a63ccf419c8f9d52f37/intel_opencl_rt-2025.3.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-KtxqZFDKkbCgANZEPpH1ZeKTI6DxX0Yte+VB8HaoxTY=";
+      url = "https://files.pythonhosted.org/packages/24/ac/08bb51b090cc1dc3ab24567901610b33d5495c76194e6714e26a2c66390a/intel_opencl_rt-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-sokbam80fyHSqfDocvuX4a70B7TDRxRRaZTdiE6l4Z4=";
     }
     {
       name = "intel_openmp";
-      url = "https://files.pythonhosted.org/packages/91/99/5ee1e9ae85ed3d10517d17d5a3a924fecc15b116385045a0a89eb2d5bc82/intel_openmp-2025.3.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-LeXxL7KC5+J1cjU5y6M1zhgx5TP5SxxIQGJWnhvFc5k=";
+      url = "https://files.pythonhosted.org/packages/72/23/60aeb428e6b1fb34fb81d4970d91ff8b5deeeeb446e1628bd78f9e3d1f8b/intel_openmp-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-5oh/cBt9IyPtFHAIiTua8i5RGqqX4PycN+uL4kpTZrA=";
     }
     {
       name = "intel_pti";
-      url = "https://files.pythonhosted.org/packages/af/85/dee48118c530d9574f683f8cf3a7ad576a23f060a520335c9284ff6ba65b/intel_pti-0.16.0-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-RS5ER5pXILP+GfAPoBveopWGoaJaVXJ4hXqwo9EceFI=";
+      url = "https://files.pythonhosted.org/packages/46/d4/48737239235707852fef380005f53405740b08dc5f3700c72e5b43946452/intel_pti-1.0.1-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-TnrZ6VXS2tjkHNldIuirHkdrri5uNR8Oi0ZT/nerLgw=";
     }
     {
       name = "intel_sycl_rt";
-      url = "https://files.pythonhosted.org/packages/f7/e4/047a0b42f8240a9c70f3ac120479aa1996f99cfe9fd97afb025d6bbd89a8/intel_sycl_rt-2025.3.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-OxnZ9ktWgEp7xYqR/pXarPELyQa5TOPFtkFhUzZ9+XI=";
+      url = "https://files.pythonhosted.org/packages/5b/9d/b183c4bdc59921b0e15006fb301b278d998abd5dc803051478de32da3476/intel_sycl_rt-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-yPSueHwzTWpItmUUsqwpx7tK7d4pOci6Yec3DKdI/OY=";
     }
     {
       name = "mkl";
-      url = "https://files.pythonhosted.org/packages/b3/ee/76755ca0ec9626835e0d024c369b968f24eadce2106a7884404720670623/mkl-2025.3.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-2zHln6No3U+kW0lDUfS34OYgSwjX2yeDYRjE4TcOsBE=";
+      url = "https://files.pythonhosted.org/packages/61/da/4921e17b1f455f7fed30d5cc0964f3289eee6a6cb03cdf7d5e20c14bd025/mkl-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-TVomRJgYqK69SyqvaykYMeaR+c90sVLfSbmc9Iu9U2A=";
     }
     {
       name = "oneccl";
-      url = "https://files.pythonhosted.org/packages/73/9b/2932b6b128924ba96712ea1c807c1618b9963518eb8ec80cf834ffc3c684/oneccl-2021.17.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-p3wsVu66HHg3mlMKK6K70zQH9kQLREdvgyktFpQQA3M=";
+      url = "https://files.pythonhosted.org/packages/1c/c0/54bf02d28010584627de21af467ee34026e231528e5141069080805076d4/oneccl-2022.1.1-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-6HetNyDo1t1F1xzwXdnWXmb1o4wJAAifFUJWnkNRLng=";
     }
     {
       name = "oneccl_devel";
-      url = "https://files.pythonhosted.org/packages/4a/a1/4fad3108825e2d65d812ba69a9fd3664181cfe8860e49110c92431d1629f/oneccl_devel-2021.17.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-bNqvEvBPqOt5NPOyPCAkEP7OeuBd/TuMxCGXAXJvGZk=";
+      url = "https://files.pythonhosted.org/packages/d5/c1/a62b38dec8add789fae282fcdaaebbb1bf55db32922fcd2fb42f8523cdc1/oneccl_devel-2022.1.1-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-oIi6Z6NhC9tiG4IzWVPOtL2mW4EUajBqG7PGTkfUdzU=";
     }
     {
       name = "onemkl_license";
-      url = "https://files.pythonhosted.org/packages/3e/1d/7acbedb07bf4c71cc499527c25a3ef60bf83ed41b8918e986ed7a4573bd4/onemkl_license-2025.3.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-tiY6Ab8pwE6mg+qxcS62t0wri3InIvRv2QeE7Yd4wJM=";
+      url = "https://files.pythonhosted.org/packages/e3/ef/8437c187319e779a76f4dbb468a1863d729297d79a1b5f44b10a58c96ec2/onemkl_license-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-Of2ClkivksngPCK6Io8HF02Cmqov48X2zXBzuOuKmAU=";
     }
     {
       name = "onemkl_sycl_blas";
-      url = "https://files.pythonhosted.org/packages/51/17/497d29cd13029f4835383d95e644d1602dafa9b7887d298ba9ea77734dce/onemkl_sycl_blas-2025.3.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-uVbBTbRJkFec83brcrpgELDIOuJ/wTL2Z1KxszfZ5yg=";
+      url = "https://files.pythonhosted.org/packages/d6/c5/94ce322721013c42578398846e57da4273d1f8e48ab1e49ad311a418d36e/onemkl_sycl_blas-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-Ip3RlGK0pYjBVupzvOKf6vDpZDTXl6m644qJaU/EZJM=";
     }
     {
       name = "onemkl_sycl_dft";
-      url = "https://files.pythonhosted.org/packages/41/ae/46fe3ca4fcf715cfef35b239abe705d32f355c3be4b9e94aca782a4720ae/onemkl_sycl_dft-2025.3.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-OfQ6M00Fq1mJsizrRiQ+rM5FcdAWyfZ5Ixef9OQnuIo=";
+      url = "https://files.pythonhosted.org/packages/71/60/80d4fa8e4e100f290572cf99856e067195fb9d22a7f462b8e0993833c526/onemkl_sycl_dft-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-cb00+MJbaGmkQKAerdJ0MVFgG/LQEbAcESBuyB9t6As=";
     }
     {
       name = "onemkl_sycl_lapack";
-      url = "https://files.pythonhosted.org/packages/24/f6/f4e38bb1a81fbda3afa2d79aa95b5a5d73c838977c1f86fbf73e7dafe676/onemkl_sycl_lapack-2025.3.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-Ng/GNrwIMtWi7i08T0QBRexD2UwXCjUdWIqa96hISc4=";
+      url = "https://files.pythonhosted.org/packages/0c/ee/9058fe036b82bc742adb6280574502da2a8c70364a945829579fd3dd8084/onemkl_sycl_lapack-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-l/82JvmUY+UHNKhQNO0sp2VgG1xdOwVgaV2nrsC09ik=";
     }
     {
       name = "onemkl_sycl_rng";
-      url = "https://files.pythonhosted.org/packages/60/f9/1f3b6ce37848c721462b4f30de08482dc27d6ffbcbba621b61ef53e28d3c/onemkl_sycl_rng-2025.3.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-Ow2JxtOM++zMANLr6V1q2BY31i4Ubk8/IQGVK8g2w50=";
+      url = "https://files.pythonhosted.org/packages/f0/3c/4ee5d31e04539d1acd0a1acd3ddf722db570ac8c381d5bc2a9a197e31ca7/onemkl_sycl_rng-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-bSTuedotf+OLmd/fPDbjny3Hlr4KtcR3o+bRwkTtXM0=";
     }
     {
       name = "onemkl_sycl_sparse";
-      url = "https://files.pythonhosted.org/packages/5d/88/4b7e2095f5d16ce1d8425efb2bf0126dd60ef659e24619bdeea85c10ef74/onemkl_sycl_sparse-2025.3.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-Sife2BqzgmqDncHOZuRMu3OfD3EJodzNGqd8yaZmPQg=";
+      url = "https://files.pythonhosted.org/packages/83/af/416bc19b3488129975a9bd1dbdb8bbe9340a49a802c1e24db6728e233359/onemkl_sycl_sparse-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-UOb+LNkBCQ1HP8VyABz6XA0ABxkDZ0XjpMlep0sy+cw=";
     }
     {
       name = "impi_rt";
-      url = "https://files.pythonhosted.org/packages/ce/29/496c69c70a5645eaa2dfe230ee9ab7dcee041a64f7a6555c515512530495/impi_rt-2021.17.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-8QIGAQRW135bVb8ZBFy8LqxG0kA3NTlBak/s2KUlMMg=";
+      url = "https://files.pythonhosted.org/packages/0e/88/a4f4392dcf96a33e53348584f0935f800292e96d093da298fcb8088ae9dd/impi_rt-2021.18.1-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-UcqJweZOYNhqfUCn1hJDErpjqvwD+2qswUCzxmNx2BQ=";
     }
     {
       name = "dpcpp_cpp_rt";
-      url = "https://files.pythonhosted.org/packages/e9/d2/edcbe7995ae3fe18f709c8ae122da8978aee1311c3e8d3bdcd23fc684e69/dpcpp_cpp_rt-2025.3.2-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-cITPpd1Dxgk4m2dhWyEsX19jO0S3naEoGJPb40Wfji0=";
+      url = "https://files.pythonhosted.org/packages/7e/98/20fffd109174139f7dc5a3413ffca0d71e0ea0837b5d7b62b634aa44ad3d/dpcpp_cpp_rt-2026.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-nnBY3t8YycyOW6/1ltxs8MUygH86WTS2DpW+L2nuQBQ=";
     }
     {
       name = "tcmlib";
-      url = "https://files.pythonhosted.org/packages/a1/a4/38e8b5a27b66ab286168ba6c449771ed71d71ec76524e7f12401474a5151/tcmlib-1.4.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-DVvZjbSNMb7H/tulwjWZv5rkPHAW1MOUbSUkLTIM7ok=";
+      url = "https://files.pythonhosted.org/packages/60/24/aa409bb20703acc70cf4d3bc620a55c789639c2995b2667fb44ae7236ec9/tcmlib-1.5.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-nXwBz/Narpv1OQtiBoDr3xCn0hHCLWSIonoClQLn0Ko=";
     }
     {
       name = "tbb";
-      url = "https://files.pythonhosted.org/packages/08/59/8d381a2cfe8d36c4f4ff9f94769ff2809bfc16014d888360b0e24c7e5c6b/tbb-2022.3.1-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-U0wInsprzxSECGhMFWIp1fCcAdMjtoWxVzn0GYW1Kdc=";
+      url = "https://files.pythonhosted.org/packages/25/0c/0266c71e3fa50a71db5ce8a1d0807863df3215c5f7b5fe7c98b257561138/tbb-2023.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-ZK01JBxzallUmPU0Or7I6qogPp/g29v0uG03xaOrHZw=";
     }
     {
       name = "umf";
-      url = "https://files.pythonhosted.org/packages/4c/b9/fe8c54eab5a3fdfdff1839d9299d90bfce5c467186b5c9ff9fd95d55ad64/umf-1.0.3-py2.py3-none-manylinux_2_28_x86_64.whl";
-      hash = "sha256-yJwJdNrtMKHKx3+3zl/5FA0Xjihrst2Rt1FIbV0KZbA=";
+      url = "https://files.pythonhosted.org/packages/c4/72/2e0182f4e6a727a15d0a8a99a82182a4f5bdec1a4f5767acfd2abdc72070/umf-1.1.0-py2.py3-none-manylinux_2_28_x86_64.whl";
+      hash = "sha256-VnFSxe5rjhbMVrKaipprkY3h/r+Jh39x6i6CR+85/DI=";
+    }
+    {
+      name = "pyzes";
+      url = "https://files.pythonhosted.org/packages/74/46/90e1741b3926e3b8590dfaa819439891865568fc5c90a0f5596b76ee6bff/pyzes-0.1.2-py3-none-any.whl";
+      hash = "sha256-VjhoQ5kEmUBBQHGvr/+R7ofxiAdFezyw0xzV1aC32yM=";
     }
 
     # ---- triton-xpu ----
     {
       name = "triton_xpu";
-      url = "https://download-r2.pytorch.org/whl/triton_xpu-3.7.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl";
-      hash = "sha256-T9rtG6/FHTooNGVqNCCmaGp06iJlCHZaSb8V1Y/zqTA=";
+      url = "https://download-r2.pytorch.org/whl/triton_xpu-3.8.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl";
+      hash = "sha256-h5sCcwTmF5EanYcopMwOMVEvPMuv3NB9ulc73WDPsIU=";
     }
 
     # ---- torch + torchvision (cp313, +xpu) ----
     {
       name = "torch";
-      url = "https://download-r2.pytorch.org/whl/xpu/torch-2.12.0%2Bxpu-cp313-cp313-linux_x86_64.whl";
-      hash = "sha256-VvdOfGwJbhp6whXree5ZC3ZL4/u6j0/rwUW8pHGUoIM=";
+      url = "https://download-r2.pytorch.org/whl/xpu/torch-2.14.0%2Bxpu-cp313-cp313-manylinux_2_28_x86_64.whl";
+      hash = "sha256-WvZeKJZY9wmnqvJqwTw/qRQ3NHvzkfTZu9W6jELSJ64=";
     }
     {
       name = "torchvision";
-      url = "https://download-r2.pytorch.org/whl/xpu/torchvision-0.27.0%2Bxpu-cp313-cp313-manylinux_2_28_x86_64.whl";
-      hash = "sha256-i8fTdRXOoYr0w4nV/eWLGp12sBXy2H5KfcYq1QscwgA=";
+      url = "https://download-r2.pytorch.org/whl/xpu/torchvision-0.29.0%2Bxpu-cp313-cp313-manylinux_2_28_x86_64.whl";
+      hash = "sha256-tomSJct+QdsJSzLXyN+KFbOeWnU4eXad6afiYuRTC3Y=";
     }
   ];
 
@@ -191,7 +196,7 @@ let
 
   combined = stdenv.mkDerivation {
     pname = "intel-xpu-runtime";
-    version = "2025.3.2";
+    version = "2026.1.0";
 
     srcs = wheelSrcs;
 

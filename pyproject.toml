@@ -12,23 +12,27 @@ license = { text = "MIT" }
 dependencies = [
   # torch, torchvision are backend-specific (xpu / cuda / rocm / cpu) and
   # pinned at the deployment layer (the Nix flake, or your venv).
-  "diffusers",
-  "transformers",
-  "accelerate",
-  "huggingface_hub",
+  # Qwen-Image 2.1 is not in the 0.40 stable release. Keep the Nix pin in sync.
+  "diffusers @ git+https://github.com/huggingface/diffusers.git@cc8644b447d8f11074d3df06d0ee0e3e7c91bf75",
+  "transformers>=5.17,<6",
+  "accelerate>=1.15",
+  "huggingface_hub>=1.32,<2",
   "Pillow",
-  "safetensors",
+  "safetensors>=0.8",
   "fastapi",
   "uvicorn",
   # Required backend for the LoRA stacking API in modern diffusers
   # (load_lora_weights + set_adapters with multi-adapter weights).
-  "peft",
+  "peft>=0.21",
   # Prompt weighting for SDXL — optional at runtime; the import is wrapped.
   "compel",
   # fp8 quantization for the FLUX.1 + FLUX.2-klein transformers (chosen over
   # torchao after benchmarking on XPU — see src/zimt/models/flux.py).
   "optimum-quanto",
 ]
+
+[project.optional-dependencies]
+ideogram = ["bitsandbytes>=0.43.3"]
 
 [project.scripts]
 zimt = "zimt.cli:main"

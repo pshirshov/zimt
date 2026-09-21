@@ -16,6 +16,7 @@
 , runCommand
 , makeWrapper
 , fetchurl
+, fetchPypi
 , fetchFromGitHub
 , stdenv
 , autoPatchelfHook
@@ -68,15 +69,17 @@ let
     doCheck = false;
     doInstallCheck = false;
   });
-  pythonForBackend =
-    if backend == "xpu"
-    then python.override {
-      packageOverrides = pySelf: pySuper: {
-        accelerate = stripTorch pySuper.accelerate;
-        peft = stripTorch pySuper.peft;
+  pythonForBackend = python.override {
+      packageOverrides = pySelf: pySuper:
+        let runtime = import ./model-runtime.nix {
+            inherit lib fetchPypi stdenv autoPatchelfHook;
+            blackForChecks = python.pkgs.black;
+          } pySelf pySuper;
+        in runtime // lib.optionalAttrs (backend == "xpu") {
+        accelerate = stripTorch runtime.accelerate;
+        peft = stripTorch runtime.peft;
       };
-    }
-    else python;
+    };
 
   pyPkgs = pythonForBackend.pkgs;
 
@@ -107,28 +110,23 @@ let
                           pyPkgs.accelerate pyPkgs.accelerate
                           pyPkgs.accelerate pyPkgs.accelerate;
 
-  # diffusers needs to be newer than nixpkgs for Z-Image / Pony / Illustrious
-  # support, and for FLUX.2 [klein] (Flux2KleinPipeline) + the quanto fp8
-  # FLUX loaders. Pinned to the exact commit zimt was developed and verified
-  # against (0.39.0.dev0); keeps safetensors compatible with nixpkgs 0.7.0.
+  # Qwen-Image 2.1 requires unreleased Diffusers code. Keep pyproject.toml
+  # on this exact revision; Krea 2 and Ideogram 4 are included here too.
   diffusersFromGit = pyPkgs.buildPythonPackage rec {
     pname = "diffusers";
-    version = "0.39.0.dev0";
+    version = "0.41.0.dev0";
     format = "pyproject";
     src = fetchFromGitHub {
       owner = "huggingface";
       repo = "diffusers";
-      rev = "79de3064ddf87ac7425731d201f84a88d0770607";
-      hash = "sha256-oV4h+Vb4ORBsfnWg1K4lwH75DF9JvQBEQI0cOWR0irg=";
+      rev = "cc8644b447d8f11074d3df06d0ee0e3e7c91bf75";
+      hash = "sha256-fmYms6h5u0Er3wKOhd9EhnkNWxQAB2VnZzfH7E5PuN4=";
     };
     nativeBuildInputs = [ pyPkgs.setuptools ];
     propagatedBuildInputs = with pyPkgs; [
       filelock huggingface-hub importlib-metadata numpy
       pillow regex requests safetensors
     ];
-    # 0.39 declares safetensors>=0.8.0-rc.0, but nixpkgs ships 0.7.0 and that
-    # works at runtime (verified in the dev venv). Skip the strict check.
-    dontCheckRuntimeDeps = true;
     doCheck = false;
     pythonImportsCheck = [ "diffusers" ];
   };
@@ -169,7 +167,8 @@ let
   xpuWheels =
     if backend == "xpu"
     then import (./. + "/wheels-xpu.nix") {
-      inherit python fetchurl lib stdenv autoPatchelfHook unzip zlib;
+      python = pythonForBackend;
+      inherit fetchurl lib stdenv autoPatchelfHook unzip zlib;
     }
     else [];
 
@@ -196,6 +195,8 @@ let
     ]
     # fp8 quantization backend for the FLUX loaders (see flux.py).
     ++ [ optimumQuanto ]
+    ++ optional (backend == "xpu") ps.pyelftools
+    ++ optional (backend == "cuda") (ps.bitsandbytes.override { torch = resolvedTorch; })
     ++ optional (resolvedTorch != null) resolvedTorch
     ++ optional (resolvedTorchvision != null) resolvedTorchvision
     ++ optional (resolvedTransformers != null) resolvedTransformers

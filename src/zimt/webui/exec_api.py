@@ -23,7 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ..buckets import parse_res
+from ..buckets import QWEN_IMAGE_21_SIZE_MULTIPLE, parse_res
 from ..dynamics import DynamicsSyntaxError, validate as validate_dynamics
 from ..lora_cmd import LoraCmdError, apply_lora_args, format_stack
 from ..memory import MemArgError, parse_mem_args
@@ -50,12 +50,16 @@ _MIN_STEPS = 1
 _MAX_STEPS = 100
 _MIN_DIMENSION = 64
 _MAX_DIMENSION = 2048
+_QWEN_IMAGE_21_MAX_DIMENSION = 2752
 _MAX_CFG = 30.0
 _MAX_PIXELS_BY_FAMILY = {
     "sdxl": 1536 * 1536,
     "zimage": 2048 * 2048,
     "flux": 2048 * 2048,
     "flux2": 2048 * 2048,
+    "qwenimage21": 2400 * 1792,
+    "krea2": 2048 * 2048,
+    "ideogram4": 2048 * 2048,
     # Remote models have no client-side pixel budget — sizing is governed by
     # the API's aspect_ratio + resolution tier. The /size and /res commands are
     # rejected for remote models before _validate_size runs, but key it anyway
@@ -68,10 +72,13 @@ def _validate_size(width: int, height: int) -> str | None:
     assert STATE.g is not None
     if width < _MIN_DIMENSION or height < _MIN_DIMENSION:
         return f"width and height must be at least {_MIN_DIMENSION}"
-    if width > _MAX_DIMENSION or height > _MAX_DIMENSION:
-        return f"width and height must be at most {_MAX_DIMENSION}"
-    if width % 16 or height % 16:
-        return "width and height must be multiples of 16"
+    max_dimension = (_QWEN_IMAGE_21_MAX_DIMENSION
+                     if STATE.g.spec.family == "qwenimage21" else _MAX_DIMENSION)
+    size_multiple = QWEN_IMAGE_21_SIZE_MULTIPLE if STATE.g.spec.family == "qwenimage21" else 16
+    if width > max_dimension or height > max_dimension:
+        return f"width and height must be at most {max_dimension}"
+    if width % size_multiple or height % size_multiple:
+        return f"width and height must be multiples of {size_multiple}"
     max_pixels = _MAX_PIXELS_BY_FAMILY[STATE.g.spec.family]
     if width * height > max_pixels:
         return f"total pixels must be at most {max_pixels} for {STATE.g.spec.family}"

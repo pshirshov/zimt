@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import gc
 import io
+import json
 import logging
 import os
 import time
@@ -34,6 +35,7 @@ import torch
 from PIL import Image
 
 from . import ansi
+from .buckets import QWEN_IMAGE_21_SIZE_MULTIPLE
 from .device import DEVICE
 from .models.loras import LORAS
 from .models.spec import LIVE_LORA_FAMILIES, LORA_FAMILIES, ModelSpec
@@ -306,6 +308,10 @@ class LocalBackend(Backend):
 
     def render(self, req: RenderRequest) -> RenderResult:
         pipe, g = self.pipe, req.g
+        assert pipe is not None, "cannot render with an unloaded pipeline"
+        if g.spec.family == "qwenimage21":
+            if g.width % QWEN_IMAGE_21_SIZE_MULTIPLE or g.height % QWEN_IMAGE_21_SIZE_MULTIPLE:
+                raise ValueError(f"width and height must be multiples of {QWEN_IMAGE_21_SIZE_MULTIPLE}")
         _ensure_sampler(pipe, g)
         _apply_lora_stack(pipe, g)
 
@@ -338,10 +344,29 @@ class LocalBackend(Backend):
 
             extra["callback_on_step_end"] = _on_step_end
 
-        # Flux.2's pipeline has no `negative_prompt` parameter (it is purely
-        # guidance-distilled), so passing the kwarg at all would raise
-        # TypeError. Flux.1 keeps it (a no-op unless true_cfg_scale > 1).
-        if g.spec.family != "flux2":
+        generator = torch.Generator(device=DEVICE).manual_seed(req.seed)
+        revised_prompt = None
+        metadata = {"device": DEVICE, "dtype": "bfloat16"}
+        if g.spec.family == "ideogram4":
+            # Constant /cfg overrides the pipeline's default 48-step schedule.
+            extra["guidance_schedule"] = None
+            if req.full_prompt.lstrip().startswith("{"):
+                json.loads(req.full_prompt)
+            else:
+                revised_prompt = pipe.upsample_prompt(
+                    req.full_prompt, height=g.height, width=g.width,
+                    generator=generator,
+                )[0]
+                prompt_arg = revised_prompt
+                metadata["revised_prompt"] = revised_prompt
+
+        if g.spec.family == "qwenimage21":
+            extra["true_cfg_scale"] = g.cfg
+            # At CFG=1 Qwen emits a warning even for an empty negative prompt.
+            extra["negative_prompt"] = (neg_arg or "") if g.cfg > 1 else None
+        else:
+            extra["guidance_scale"] = g.cfg
+        if g.spec.family not in {"flux2", "ideogram4", "qwenimage21"}:
             extra["negative_prompt"] = neg_arg
 
         image = pipe(
@@ -349,13 +374,13 @@ class LocalBackend(Backend):
             height=g.height,
             width=g.width,
             num_inference_steps=g.steps,
-            guidance_scale=g.cfg,
-            generator=torch.Generator(device=DEVICE).manual_seed(req.seed),
+            generator=generator,
             **extra,
         ).images[0]
         return RenderResult(
             image=image,
-            metadata={"device": DEVICE, "dtype": "bfloat16"},
+            revised_prompt=revised_prompt,
+            metadata=metadata,
         )
 
 

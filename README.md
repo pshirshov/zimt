@@ -13,6 +13,10 @@ Models currently supported:
 
 | name | source | notes |
 |---|---|---|
+| `qwen-image-2.1` | [Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) | bf16, 40 steps, CFG=1, native RGBA and 2K presets; Qwen Research License |
+| `krea-2-turbo` | [krea/Krea-2-Turbo](https://huggingface.co/krea/Krea-2-Turbo) | bf16, 8 steps, CFG=0; gated, Krea community license |
+| `krea-2-raw` | [krea/Krea-2-Raw](https://huggingface.co/krea/Krea-2-Raw) | bf16, 52 steps, CFG=3.5; gated, Krea community license |
+| `ideogram-4` | [ideogram-ai/ideogram-4-nf4-diffusers](https://huggingface.co/ideogram-ai/ideogram-4-nf4-diffusers) | NF4, NVIDIA CUDA only; gated, non-commercial license; local caption expansion |
 | `z-image-turbo` | `Tongyi-MAI/Z-Image-Turbo` | 6B DiT, Qwen3-4B text encoder, CFG=0 |
 | `pony-v6-xl` | `kitty7779/ponyDiffusionV6XL` | SDXL fine-tune, score-tag prefix, fp16-fix VAE |
 | `illustrious-xl-v1` | `WhiteAiZ/Illustrious-xl-v1.0` | anime-focused SDXL fine-tune |
@@ -26,7 +30,87 @@ Models currently supported:
 | `pony-realism-v23` | `John6666/pony-realism-v23-sdxl` | Pony-family, photorealism focus |
 | `spicy-realism-nsfw-mix` | `John6666/spicy-realism-nsfw-mix-v30-sdxl` | Pony-family, adult photorealism focus |
 
-Built-in LoRAs (all SDXL — compatible with every base except `z-image-turbo`):
+Qwen 2.1 and Krea 2 use the released bf16 weights. Their transformer and
+text encoder can exceed the available inference memory on a 32 GiB
+GPU; select `/mem cpuoffload` before loading. Defaults start at 1024×1024.
+For example:
+
+```
+/mem cpuoffload /model qwen-image-2.1 /seed 42 a ceramic teapot
+/mem cpuoffload /model krea-2-turbo /seed 42 a fox in the snow
+```
+
+These entries appear in the Models tab and use its existing download button.
+For Krea and Ideogram, accept access on the linked Hugging Face model pages
+and provide `HF_TOKEN` to the Zimt process. The model licenses apply separately
+from Zimt's license; see the respective model cards before use.
+
+Ideogram's download also fetches
+[`diffusers/qwen3-vl-8b-instruct-lm-head`](https://huggingface.co/diffusers/qwen3-vl-8b-instruct-lm-head).
+Ordinary prompts are expanded locally to its structured caption format;
+the expanded caption is saved as `revised_prompt` in PNG metadata. A JSON
+caption can be supplied directly to skip expansion. `/cfg` selects constant
+guidance (7 by default), overriding upstream's 7→3 guidance schedule. Negative
+prompts are not supported. The NF4 checkpoint needs `bitsandbytes` (included
+in the Nix CUDA package; install the `ideogram` extra for a venv). The upstream
+FP8 release requires a different runtime and is not an Intel XPU alternative
+in this integration.
+
+These integrations require the Diffusers revision pinned in both
+`pyproject.toml` and `nix/package.nix`, plus Transformers ≥5.17, Accelerate ≥1.15,
+PEFT ≥0.21, Hub ≥1.32, and safetensors ≥0.8.
+The Nix package includes these dependency updates. LoRAs and image editing
+for these new families are not exposed by Zimt yet.
+
+Boogu Image 0.1 is deferred: its
+[`boogu-image` package](https://github.com/boogu-project/Boogu-Image/blob/main/pyproject.toml)
+requires Python <3.13, Diffusers <0.39, and PyTorch <2.12, conflicting with
+Zimt's Python 3.13, newer Diffusers, and XPU torch 2.14 runtime. Its
+[inference guide](https://github.com/boogu-project/Boogu-Image/blob/main/INFERENCE_GUIDE.md)
+documents CPU/CUDA devices, not Intel XPU. Supporting it needs a compatible
+port or an isolated runtime; it is not registered as a working model.
+
+Hardware verification uses `scripts/verify-model-xpu.py`, separately from the
+automated test suite. It loads real cached checkpoints through Zimt, generates
+two images with the same seed, checks PNG dimensions/provenance and nonblank
+pixels, and writes timings, peak allocated/reserved GPU memory, versions,
+checkpoint revision, and pixel hashes to `report.json` alongside the images.
+Download the model first; verification itself can run entirely offline:
+
+```bash
+ZIMT_PYTHON_ENV=$(nix build .#zimt-xpu.pythonEnv --no-link --print-out-paths)
+LD_LIBRARY_PATH=/run/opengl-driver/lib \
+OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors \
+HF_HOME=/srv/nvme/zimt/hf_cache HF_HUB_OFFLINE=1 \
+PYTHONPATH=src ZIMT_DEVICE=xpu \
+"$ZIMT_PYTHON_ENV/bin/python" scripts/verify-model-xpu.py qwen-image-2.1 \
+  --output-dir out/b70-verification/qwen-image-2.1
+```
+
+Verified on 2026-09-21 with an Intel Arc Pro B70 (31.89 GiB), torch
+2.14.0+xpu, the pinned Diffusers revision, and the dependency versions above.
+These are real-checkpoint runs through Zimt at 1024×1024 with
+`/mem cpuoffload`, seed 42, and each model's default steps/CFG:
+
+| model | steps / CFG | generation 1 / 2 | peak allocated GPU memory | output |
+|---|---|---|---|---|
+| Qwen Image 2.1 | 40 / 1 | 188.3 / 348.9 s | 16.38 GiB | RGBA |
+| Krea 2 Turbo | 8 / 0 | 148.4 / 247.9 s | 24.56 GiB | RGB |
+| Krea 2 Raw | 52 / 3.5 | 270.9 / 395.2 s | 24.59 GiB | RGB |
+
+All three passed two runs, with identical pixel hashes within each same-seed
+pair. They produced nonblank images with the requested dimensions, correct
+PNG provenance, and the prompted teapot and text card on visual inspection.
+Host paging was observed; these timings are not isolated performance
+benchmarks. This does not verify 2K generation, other memory strategies, or
+Ideogram's CUDA inference. Ideogram's explicit XPU rejection is tested;
+actual CUDA generation remains unverified.
+
+`run.sh` also defaults to `/srv/nvme/zimt/hf_cache`, while preserving an explicit
+`HF_HOME` override. In the sandbox this dataset is read-only: populate it from
+the host, not by creating a second model cache in the checkout.
+
+Built-in SDXL LoRAs (for SDXL base models):
 
 | name | source | trigger | notes |
 |---|---|---|---|

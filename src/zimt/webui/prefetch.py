@@ -117,11 +117,14 @@ async def prefetch_model(name: str, *, kind: str = "base") -> str:
                 loop = asyncio.get_running_loop()
                 with download_context(job.id):
                     ctx = contextvars.copy_context()
-                    repo_id = spec.repo_id
-                    await loop.run_in_executor(
-                        _PREFETCH_EXECUTOR,
-                        lambda: ctx.run(_snapshot_download_sync, repo_id),
-                    )
+                    extra_repos = spec.extra_repo_ids if kind == "base" else ()
+                    for repo_id in (spec.repo_id, *extra_repos):
+                        if CANCEL_EVENTS[job.id].is_set():
+                            raise DownloadCanceled()
+                        await loop.run_in_executor(
+                            _PREFETCH_EXECUTOR,
+                            lambda: ctx.run(_snapshot_download_sync, repo_id),
+                        )
                 # Drop the install-status cache so is_installed picks up
                 # the new repo on the next generation without waiting for
                 # the TTL window to elapse.

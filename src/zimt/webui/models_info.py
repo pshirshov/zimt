@@ -112,6 +112,10 @@ def models_info() -> dict[str, Any]:
         )
         for name, spec in MODELS.items()
     ]
+    for entry in bases:
+        extra_repos = MODELS[entry["name"]].extra_repo_ids
+        entry["installed"] = entry["installed"] and all(repo in cache for repo in extra_repos)
+        entry["size_bytes"] += sum(cache[repo]["size_bytes"] for repo in extra_repos if repo in cache)
     loras = [
         _entry_for(
             name, spec.repo_id, cache,

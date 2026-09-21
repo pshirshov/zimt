@@ -56,6 +56,19 @@ FLUX_BUCKETS: list[Resolution] = [
     (1536, 1536, "1:1 large (2.36 MP)"),
 ]
 
+QWEN_IMAGE_21_SIZE_MULTIPLE = 32
+
+QWEN_IMAGE_21_BUCKETS: list[Resolution] = [
+    (1024, 1024, "1:1 preview (1 MP)"),
+    (2048, 2048, "1:1 native (2K)"),
+    (2400, 1792, "4:3 native landscape"),
+    (1792, 2400, "3:4 native portrait"),
+    (2528, 1696, "3:2 native landscape"),
+    (1696, 2528, "2:3 native portrait"),
+    (2752, 1536, "16:9 native landscape"),
+    (1536, 2752, "9:16 native portrait"),
+]
+
 
 # Orientation keywords accepted by `/res`. Each picks the largest preset
 # (by total pixel area) whose aspect matches the requested orientation.

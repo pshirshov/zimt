@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Dev entry point for the venv-based workflow. Runs `python -m zimt` with
-# the local source tree on PYTHONPATH and HF cache redirected into the
-# project directory.
+# the local source tree on PYTHONPATH and HF cache on the model dataset.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -20,8 +19,8 @@ GCC_LIB=$(nix eval --raw nixpkgs#gcc.cc.lib.outPath 2>/dev/null || true)
 export LD_LIBRARY_PATH="${GCC_LIB:+${GCC_LIB}/lib:}/run/opengl-driver/lib"
 export OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors
 
-# HF cache lives in the project dir (sandbox can only write here / /tmp/exchange).
-export HF_HOME=/home/pavel/work/safe/zimt/hf_cache
+# Keep an explicit deployment override; otherwise use the dedicated model dataset.
+export HF_HOME="${HF_HOME:-/srv/nvme/zimt/hf_cache}"
 export HF_XET_HIGH_PERFORMANCE=1
 
 exec .venv/bin/python -m zimt "$@"

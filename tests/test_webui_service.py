@@ -213,6 +213,35 @@ class ExecValidationTests(StateCase):
 
 
 class DownloadIdentityTests(StateCase):
+    async def test_ideogram_prefetch_includes_local_prompt_expansion_weights(self) -> None:
+        requested: list[str] = []
+        tasks = []
+        with (
+            patch.object(prefetch, "_snapshot_download_sync", requested.append),
+            patch.object(prefetch, "register_task", lambda coro: tasks.append(asyncio.create_task(coro))),
+        ):
+            job_id = await prefetch.prefetch_model("ideogram-4")
+            await asyncio.gather(*tasks)
+        spec = MODELS["ideogram-4"]
+        self.assertEqual(requested, [spec.repo_id, *spec.extra_repo_ids])
+        self.assertEqual(STATE.jobs[job_id].status, "done")
+
+    async def test_prefetch_component_failure_is_not_reported_as_success(self) -> None:
+        tasks = []
+
+        def download(repo_id: str) -> None:
+            if repo_id in MODELS["ideogram-4"].extra_repo_ids:
+                raise RuntimeError("prompt head download failed")
+
+        with (
+            patch.object(prefetch, "_snapshot_download_sync", download),
+            patch.object(prefetch, "register_task", lambda coro: tasks.append(asyncio.create_task(coro))),
+        ):
+            job_id = await prefetch.prefetch_model("ideogram-4")
+            await asyncio.gather(*tasks)
+        self.assertEqual(STATE.jobs[job_id].status, "error")
+        self.assertIn("prompt head download failed", STATE.jobs[job_id].error)
+
     async def test_prefetch_job_exposes_download_target_kind(self) -> None:
         # regression: model-tab downloads previously exposed only kind="download"
         # plus model name, so same-named base and LoRA targets shared UI state.

@@ -17,10 +17,10 @@ from ..buckets import Resolution, SDXL_BUCKETS
 from ..memory import MemStrategy
 from ..samplers import SDXL_SAMPLERS, SamplerEntry
 
-Family = Literal["sdxl", "zimage", "flux", "flux2", "remote"]
+Family = Literal["sdxl", "zimage", "flux", "flux2", "qwenimage21", "krea2", "ideogram4", "remote"]
 """Backend family.
 
-The first four are local diffusers pipelines (see ``LocalBackend``). ``remote``
+All except ``remote`` are local diffusers pipelines (see ``LocalBackend``). ``remote``
 is a hosted image API (see ``RemoteBackend`` + :class:`RemoteImageConfig`):
 its pixel-space knobs (steps, cfg, sampler, seed, negative, clip_skip, LoRA)
 have no meaning, and it carries its own ``aspect_ratio`` / ``resolution``
@@ -82,6 +82,8 @@ class ModelSpec:
     ``repo_id`` / ``repo_url`` PNG metadata fields. Empty string means
     "no associated HF repo" (shouldn't happen for any registered model).
     """
+    extra_repo_ids: tuple[str, ...] = ()
+    """Additional HF components required by the loader and download button."""
     compatibility_tags: list[str] = field(default_factory=list)
     """Free-form tags advertised by this base model.
 

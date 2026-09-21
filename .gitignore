@@ -11,7 +11,7 @@ __pycache__/
 
 # zimt artifacts
 out/
-hf_cache/
+hf_cache
 custom/
 .prompt_history
 

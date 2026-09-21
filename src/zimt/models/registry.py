@@ -9,9 +9,9 @@ Keys are the strings users type after ``/model``. Add a model by:
 
 from __future__ import annotations
 
-from ..buckets import FLUX_BUCKETS, SDXL_BUCKETS, ZIMAGE_BUCKETS
+from ..buckets import FLUX_BUCKETS, QWEN_IMAGE_21_BUCKETS, SDXL_BUCKETS, ZIMAGE_BUCKETS
 from ..samplers import FLUX_SAMPLERS, SDXL_SAMPLERS, ZIMAGE_SAMPLERS
-from . import community, flux, illustrious, noobai, pony, zimage
+from . import community, flux, illustrious, noobai, pony, vision, zimage
 from .sdxl_common import tokenize_report_sdxl
 from .spec import ModelSpec
 
@@ -27,6 +27,75 @@ _NEG_PONY = (
 )
 
 MODELS: dict[str, ModelSpec] = {
+    "qwen-image-2.1": ModelSpec(
+        name="qwen-image-2.1",
+        description=(
+            "Qwen-Image 2.1 (7B DiT + Qwen3-VL, bf16, RGBA output; "
+            "use /mem cpuoffload on 32 GiB GPUs; Qwen Research License)"
+        ),
+        repo_id="Qwen/Qwen-Image-2.1",
+        family="qwenimage21",
+        default_steps=40,
+        default_cfg=1.0,
+        default_negative="",
+        resolutions=list(QWEN_IMAGE_21_BUCKETS),
+        samplers=dict(FLUX_SAMPLERS),
+        default_sampler="flow-match-euler",
+        load=vision.make_loader("Qwen/Qwen-Image-2.1"),
+        tokenize_report=vision.tokenize_qwen,
+    ),
+    "krea-2-turbo": ModelSpec(
+        name="krea-2-turbo",
+        description=(
+            "Krea 2 Turbo (8-step distilled, bf16, CFG=0; gated HF access; "
+            "use /mem cpuoffload on 32 GiB GPUs; Krea community license)"
+        ),
+        repo_id="krea/Krea-2-Turbo",
+        family="krea2",
+        default_steps=8,
+        default_cfg=0.0,
+        default_negative="",
+        resolutions=list(FLUX_BUCKETS) + [(2048, 2048, "1:1 large (2K)")],
+        samplers=dict(FLUX_SAMPLERS),
+        default_sampler="flow-match-euler",
+        load=vision.make_loader("krea/Krea-2-Turbo"),
+        tokenize_report=vision.tokenize_krea,
+    ),
+    "krea-2-raw": ModelSpec(
+        name="krea-2-raw",
+        description=(
+            "Krea 2 Raw (undistilled, bf16, 52 steps, CFG=3.5; gated HF access; "
+            "use /mem cpuoffload on 32 GiB GPUs; Krea community license)"
+        ),
+        repo_id="krea/Krea-2-Raw",
+        family="krea2",
+        default_steps=52,
+        default_cfg=3.5,
+        default_negative="",
+        resolutions=[r for r in FLUX_BUCKETS if r[0] * r[1] <= 1024 * 1024],
+        samplers=dict(FLUX_SAMPLERS),
+        default_sampler="flow-match-euler",
+        load=vision.make_loader("krea/Krea-2-Raw"),
+        tokenize_report=vision.tokenize_krea,
+    ),
+    "ideogram-4": ModelSpec(
+        name="ideogram-4",
+        description=(
+            "Ideogram 4 NF4 (NVIDIA CUDA only; gated HF access; local prompt "
+            "expansion; /cfg sets constant guidance; non-commercial license)"
+        ),
+        repo_id=vision.IDEOGRAM_REPO,
+        extra_repo_ids=(vision.IDEOGRAM_PROMPT_HEAD_REPO,),
+        family="ideogram4",
+        default_steps=48,
+        default_cfg=7.0,
+        default_negative="",
+        resolutions=list(FLUX_BUCKETS) + [(2048, 2048, "1:1 native (2K)")],
+        samplers=dict(FLUX_SAMPLERS),
+        default_sampler="flow-match-euler",
+        load=vision.load_ideogram,
+        tokenize_report=vision.tokenize_ideogram,
+    ),
     "z-image-turbo": ModelSpec(
         name="z-image-turbo",
         description="Tongyi-MAI Z-Image-Turbo (6B DiT, Qwen3 text enc, CFG=0)",

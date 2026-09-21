@@ -16,7 +16,7 @@ Models currently supported:
 | `qwen-image-2.1` | [Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) | bf16, 40 steps, CFG=1, native RGBA and 2K presets; Qwen Research License |
 | `krea-2-turbo` | [krea/Krea-2-Turbo](https://huggingface.co/krea/Krea-2-Turbo) | bf16, 8 steps, CFG=0; gated, Krea community license |
 | `krea-2-raw` | [krea/Krea-2-Raw](https://huggingface.co/krea/Krea-2-Raw) | bf16, 52 steps, CFG=3.5; gated, Krea community license |
-| `ideogram-4` | [ideogram-ai/ideogram-4-nf4-diffusers](https://huggingface.co/ideogram-ai/ideogram-4-nf4-diffusers) | NF4, NVIDIA CUDA only; gated, non-commercial license; local caption expansion |
+| `ideogram-4` | [ideogram-ai/ideogram-4-nf4-diffusers](https://huggingface.co/ideogram-ai/ideogram-4-nf4-diffusers) | NF4, NVIDIA CUDA / Intel XPU; gated, non-commercial license; local caption expansion |
 | `z-image-turbo` | `Tongyi-MAI/Z-Image-Turbo` | 6B DiT, Qwen3-4B text encoder, CFG=0 |
 | `pony-v6-xl` | `kitty7779/ponyDiffusionV6XL` | SDXL fine-tune, score-tag prefix, fp16-fix VAE |
 | `illustrious-xl-v1` | `WhiteAiZ/Illustrious-xl-v1.0` | anime-focused SDXL fine-tune |
@@ -52,9 +52,18 @@ the expanded caption is saved as `revised_prompt` in PNG metadata. A JSON
 caption can be supplied directly to skip expansion. `/cfg` selects constant
 guidance (7 by default), overriding upstream's 7→3 guidance schedule. Negative
 prompts are not supported. The NF4 checkpoint needs `bitsandbytes` (included
-in the Nix CUDA package; install the `ideogram` extra for a venv). The upstream
-FP8 release requires a different runtime and is not an Intel XPU alternative
-in this integration.
+in the Nix CUDA and XPU packages; install the `ideogram` extra for a venv).
+The XPU package pins bitsandbytes 0.50.2 with native oneAPI 2026 kernels;
+ZLUDA is not required. On the 32 GiB B70, use `/mem off` at 1024×1024:
+
+```
+/mem off /model ideogram-4 /seed 42 a ceramic teapot
+```
+
+Prompt expansion runs unconstrained when optional upstream `outlines` is
+absent; generated captions can contain duplicate JSON keys. Supply a structured
+JSON caption directly when exact caption structure matters. The upstream FP8
+release uses a different runtime and is not included in this integration.
 
 These integrations require the Diffusers revision pinned in both
 `pyproject.toml` and `nix/package.nix`, plus Transformers ≥5.17, Accelerate ≥1.15,
@@ -84,8 +93,10 @@ OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors \
 HF_HOME=/srv/nvme/zimt/hf_cache HF_HUB_OFFLINE=1 \
 PYTHONPATH=src ZIMT_DEVICE=xpu \
 "$ZIMT_PYTHON_ENV/bin/python" scripts/verify-model-xpu.py qwen-image-2.1 \
-  --output-dir out/b70-verification/qwen-image-2.1
+  --mem cpuoffload --output-dir out/b70-verification/qwen-image-2.1
 ```
+
+For Ideogram, select `ideogram-4 --mem off` and a separate output directory.
 
 Verified on 2026-09-21 with an Intel Arc Pro B70 (31.89 GiB), torch
 2.14.0+xpu, the pinned Diffusers revision, and the dependency versions above.
@@ -102,9 +113,15 @@ All three passed two runs, with identical pixel hashes within each same-seed
 pair. They produced nonblank images with the requested dimensions, correct
 PNG provenance, and the prompted teapot and text card on visual inspection.
 Host paging was observed; these timings are not isolated performance
-benchmarks. This does not verify 2K generation, other memory strategies, or
-Ideogram's CUDA inference. Ideogram's explicit XPU rejection is tested;
-actual CUDA generation remains unverified.
+benchmarks. This does not verify 2K generation or other memory strategies.
+
+Ideogram 4 NF4 was also verified through the packaged Nix XPU environment and
+production loader, using bitsandbytes 0.50.2, `/mem off`, 1024×1024, 48 steps,
+CFG 7, and seed 42. Both runs passed: 171.3 / 168.1 seconds, 20.32 GiB peak
+allocated and 21.44 GiB peak reserved GPU memory. Both produced coherent teapot
+and text-card images. Prompt expansion was identical, but pixels were not
+bit-exact (mean absolute channel difference 0.31 on a 0–255 scale). Ideogram's
+2K, CPU-offload, and CUDA generation remain unverified.
 
 `run.sh` also defaults to `/srv/nvme/zimt/hf_cache`, while preserving an explicit
 `HF_HOME` override. In the sandbox this dataset is read-only: populate it from

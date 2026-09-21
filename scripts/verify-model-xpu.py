@@ -45,6 +45,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", choices=sorted(MODELS))
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--mem", choices=("off", "cpuoffload"), required=True)
     parser.add_argument("--steps", type=int)
     parser.add_argument("--size", type=int)
     parser.add_argument("--runs", type=int, default=2)
@@ -72,7 +73,7 @@ def main() -> None:
             "torch", "torchvision", "diffusers", "transformers", "accelerate", "peft",
             "huggingface-hub", "safetensors",
         )},
-        "memory_strategy": "cpuoffload",
+        "memory_strategy": args.mem,
         "steps": config.steps,
         "cfg": config.cfg,
         "width": config.width,
@@ -80,12 +81,14 @@ def main() -> None:
         "seed": SEED,
         "prompt": PROMPT,
     }
+    if spec.family == "ideogram4":
+        report["versions"]["bitsandbytes"] = version("bitsandbytes")
     print(json.dumps(report, indent=2), flush=True)
     measurements: list[Measurement] = []
     backend = None
     try:
         started = time.perf_counter()
-        backend = load_spec(spec, MemStrategy(mode="cpuoffload"))
+        backend = load_spec(spec, MemStrategy(mode=args.mem))
         torch.xpu.synchronize()
         report["load_seconds"] = time.perf_counter() - started
         for _run in range(args.runs):

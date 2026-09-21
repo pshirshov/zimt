@@ -111,9 +111,40 @@ class VisionModelsTests(unittest.TestCase):
         self.assertEqual(pipe.calls[0]["prompt"], caption)
 
     def test_ideogram_rejects_unsupported_devices_before_loading(self):
-        for device in ("xpu", "cpu", "mps"):
+        for device in ("cpu", "mps"):
             with self.subTest(device=device), self.assertRaisesRegex(ValueError, "NVIDIA CUDA"):
                 vision.load_ideogram(device, MemStrategy())
+
+    def test_ideogram_loads_on_xpu_and_nvidia_cuda(self):
+        # Regression: the loader rejected XPU despite native NF4 support.
+        for device in ("xpu", "xpu:0", "cuda", "cuda:0"):
+            placements = []
+            pipe = SimpleNamespace(to=placements.append)
+            head = object()
+
+            def load_head(repo_id, *, torch_dtype):
+                self.assertEqual(repo_id, vision.IDEOGRAM_PROMPT_HEAD_REPO)
+                return head
+
+            def load_pipeline(repo_id, *, prompt_enhancer_head, torch_dtype):
+                self.assertEqual(repo_id, vision.IDEOGRAM_REPO)
+                self.assertIs(prompt_enhancer_head, head)
+                return pipe
+
+            with (self.subTest(device=device),
+                  patch("torch.version.hip", None),
+                  patch("diffusers.Ideogram4PromptEnhancerHead.from_pretrained", load_head),
+                  patch("diffusers.Ideogram4Pipeline.from_pretrained", load_pipeline)):
+                self.assertIs(vision.load_ideogram(device, MemStrategy(mode="off")), pipe)
+                self.assertEqual(placements, [device])
+
+    def test_ideogram_still_rejects_rocm(self):
+        with patch("torch.version.hip", "7.0"), self.assertRaisesRegex(ValueError, "ROCm"):
+            vision.load_ideogram("cuda", MemStrategy(mode="off"))
+
+    def test_ideogram_still_rejects_loras_on_xpu(self):
+        with self.assertRaisesRegex(ValueError, "LoRAs are not supported"):
+            vision.load_ideogram("xpu", MemStrategy(mode="off"), (("adapter", 1.0),))
 
     def test_generation_keeps_qwen_alpha_and_png_provenance(self):
         spec = MODELS["qwen-image-2.1"]

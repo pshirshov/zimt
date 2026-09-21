@@ -172,6 +172,28 @@ let
     }
     else [];
 
+  # Keep the tested oneAPI 2026 NF4 kernels; CUDA/ROCm and oneAPI 2025
+  # binaries in the same wheel would require unrelated runtime libraries.
+  bitsandbytesXpu = pyPkgs.buildPythonPackage {
+    pname = "bitsandbytes";
+    version = "0.50.2";
+    format = "wheel";
+    src = fetchurl {
+      url = "https://files.pythonhosted.org/packages/a5/6e/e4e8b75716dbe5e50964f070266e06f4e6806ce051bfb97f52ee162b9310/bitsandbytes-0.50.2-py3-none-manylinux_2_24_x86_64.whl";
+      sha256 = "55348a9a4a21bfd99cf8c7b32fe67b4030ae5c2a05738e03c1747f65fa6ec283";
+    };
+    nativeBuildInputs = [ autoPatchelfHook ];
+    buildInputs = [ stdenv.cc.cc.lib ] ++ xpuWheels;
+    dependencies = [ pyPkgs.numpy pyPkgs.packaging ] ++ xpuWheels;
+    postInstall = ''
+      rm "$out/${pythonForBackend.sitePackages}/bitsandbytes/"libbitsandbytes_cuda*.so
+      rm "$out/${pythonForBackend.sitePackages}/bitsandbytes/"libbitsandbytes_rocm*.so
+      rm "$out/${pythonForBackend.sitePackages}/bitsandbytes/libbitsandbytes_xpu2025.so"
+    '';
+    doCheck = false;
+    pythonImportsCheck = [ "bitsandbytes" ];
+  };
+
   pythonEnv = pythonForBackend.withPackages (ps: with ps;
     # Always-on common deps.
     [ fastapi
@@ -196,6 +218,7 @@ let
     # fp8 quantization backend for the FLUX loaders (see flux.py).
     ++ [ optimumQuanto ]
     ++ optional (backend == "xpu") ps.pyelftools
+    ++ optional (backend == "xpu") bitsandbytesXpu
     ++ optional (backend == "cuda") (ps.bitsandbytes.override { torch = resolvedTorch; })
     ++ optional (resolvedTorch != null) resolvedTorch
     ++ optional (resolvedTorchvision != null) resolvedTorchvision

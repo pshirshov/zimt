@@ -35,8 +35,9 @@ def make_loader(repo_id: str) -> Callable[..., DiffusionPipeline]:
 
 def load_ideogram(device: str, mem: MemStrategy,
                   loras: tuple[tuple[str, float], ...] = ()) -> DiffusionPipeline:
-    if torch.device(device).type != "cuda" or torch.version.hip is not None:
-        raise ValueError("Ideogram 4 NF4 requires NVIDIA CUDA; XPU/ROCm/CPU are not supported")
+    device_type = torch.device(device).type
+    if device_type not in {"cuda", "xpu"} or (device_type == "cuda" and torch.version.hip is not None):
+        raise ValueError("Ideogram 4 NF4 requires NVIDIA CUDA or Intel XPU; ROCm/CPU are not supported")
     if loras:
         raise ValueError("LoRAs are not supported for Ideogram 4 in Zimt")
     from diffusers import Ideogram4Pipeline, Ideogram4PromptEnhancerHead

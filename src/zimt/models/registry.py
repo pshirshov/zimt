@@ -81,7 +81,7 @@ MODELS: dict[str, ModelSpec] = {
     "ideogram-4": ModelSpec(
         name="ideogram-4",
         description=(
-            "Ideogram 4 NF4 (NVIDIA CUDA only; gated HF access; local prompt "
+            "Ideogram 4 NF4 (NVIDIA CUDA / Intel XPU; gated HF access; local prompt "
             "expansion; /cfg sets constant guidance; non-commercial license)"
         ),
         repo_id=vision.IDEOGRAM_REPO,

@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ideogram = ["bitsandbytes>=0.43.3"]
+ideogram = ["bitsandbytes>=0.50.2"]
 
 [project.scripts]
 zimt = "zimt.cli:main"

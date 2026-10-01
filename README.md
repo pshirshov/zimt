@@ -323,6 +323,7 @@ Options:
 | `outDir` | path | `/var/lib/zimt/out` | |
 | `hfCacheDir` | path | `/var/lib/zimt/hf_cache` | maps to `HF_HOME` |
 | `hfTokenFile` | nullable path | `null` | loaded via systemd `LoadCredential`; never appears in the unit's static env |
+| `xaiApiKeyFile` | nullable path | `null` | file holding the bare xAI API key; loaded via `LoadCredential` and exported as `XAI_API_KEY` to enable the hosted Grok Imagine models |
 | `user` / `group` | str | `zimt` / `zimt` | system user with `render` / `video` groups for `/dev/dri/*` |
 | `extraEnvironment` | attrs of str | `{}` | merged on top of zimt-managed env |
 

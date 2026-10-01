@@ -3,10 +3,11 @@
 # Provides ``smind.services.zimt.*`` options. The ``gpuSupport`` enum
 # selects the package variant (xpu / cuda / rocm / cpu).
 #
-# Secret handling: the HuggingFace token is loaded via systemd
-# ``LoadCredential`` so the file path itself stays in the unit but the
-# token value never lands in the unit's static environment. A small
-# ExecStart wrapper reads the credential at start and exports HF_TOKEN.
+# Secret handling: the HuggingFace token, the web auth token and the xAI
+# API key are loaded via systemd ``LoadCredential`` so the file paths
+# themselves stay in the unit but the values never land in the unit's
+# static environment. A small ExecStart wrapper reads the credentials at
+# start and exports HF_TOKEN / ZIMT_AUTH_TOKEN / XAI_API_KEY.
 { config, lib, pkgs, zimtPackages, ... }:
 
 let
@@ -20,6 +21,7 @@ let
 
   hasTokenFile = cfg.hfTokenFile != null;
   hasWebAuthTokenFile = cfg.webAuthTokenFile != null;
+  hasXaiApiKeyFile = cfg.xaiApiKeyFile != null;
 
   startScript = pkgs.writeShellScript "zimt-start" ''
     set -euo pipefail
@@ -37,6 +39,14 @@ let
         export ZIMT_AUTH_TOKEN="$(cat "$CREDENTIALS_DIRECTORY/web-auth-token")"
       else
         echo "warning: webAuthTokenFile is set but credential not readable" >&2
+      fi
+    ''}
+    ${lib.optionalString hasXaiApiKeyFile ''
+      # xAI API key. Enables discovery of the hosted Grok Imagine models.
+      if [ -r "$CREDENTIALS_DIRECTORY/xai-api-key" ]; then
+        export XAI_API_KEY="$(cat "$CREDENTIALS_DIRECTORY/xai-api-key")"
+      else
+        echo "warning: xaiApiKeyFile is set but credential not readable" >&2
       fi
     ''}
     exec ${cfg.package}/bin/zimt \
@@ -135,6 +145,19 @@ in
       '';
     };
 
+    xaiApiKeyFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = "/run/secrets/zimt-xai-api-key";
+      description = ''
+        Path to a file containing the bare xAI API key (the value only,
+        not a ``XAI_API_KEY=...`` line). Loaded via systemd
+        ``LoadCredential`` and exported as ``XAI_API_KEY`` at start, which
+        enables discovery of the hosted Grok Imagine image models.
+        ``null`` to disable.
+      '';
+    };
+
     user = lib.mkOption {
       type = lib.types.str;
       default = "zimt";
@@ -199,7 +222,9 @@ in
         LoadCredential =
           lib.optional hasTokenFile "hf-token:${toString cfg.hfTokenFile}"
           ++ lib.optional hasWebAuthTokenFile
-            "web-auth-token:${toString cfg.webAuthTokenFile}";
+            "web-auth-token:${toString cfg.webAuthTokenFile}"
+          ++ lib.optional hasXaiApiKeyFile
+            "xai-api-key:${toString cfg.xaiApiKeyFile}";
 
         ExecStart = startScript;
         Restart = "on-failure";
